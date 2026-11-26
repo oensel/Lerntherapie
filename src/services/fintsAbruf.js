@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { FinTSClient, FinTSConfig } from 'lib-fints';
 import { bildeUmsaetze } from './umsatzAbbildung.js';
+import { setzeTanMedium } from './fintsTanMedium.js';
 
 const PRODUKT_VERSION = '0.1';
 const ERSTER_ABRUF_TAGE = 90;
@@ -65,7 +66,8 @@ export async function holeUmsaetze(knex, { env = process.env, ausloeser = 'manue
     const z = await ladeZustand(knex, env);
 
     const config = FinTSConfig.fromBankingInformation(env.FINTS_PRODUKT_ID, PRODUKT_VERSION, z.banking_information,
-      env.FINTS_BENUTZER, env.FINTS_PIN, z.tan_methode, z.tan_medium || undefined);
+      env.FINTS_BENUTZER, env.FINTS_PIN, z.tan_methode);
+    setzeTanMedium(config, z.tan_medium);
     const client = new FinTSClient(config);
 
     const konten = config.bankingInformation?.upd?.bankAccounts ?? [];

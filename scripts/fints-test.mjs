@@ -7,6 +7,7 @@ import 'dotenv/config';
 import fs from 'node:fs';
 import readline from 'node:readline/promises';
 import { FinTSClient, FinTSConfig } from 'lib-fints';
+import { setzeTanMedium } from '../src/services/fintsTanMedium.js';
 
 const INFO_DATEI = 'data/fints-bankinfo.json';
 const PRODUKT_VERSION = '0.1';
@@ -75,10 +76,11 @@ const pin = await frageVerdeckt('PIN: ');
 const gespeichert = fs.existsSync(INFO_DATEI) ? JSON.parse(fs.readFileSync(INFO_DATEI, 'utf8')) : null;
 
 const config = gespeichert
-  ? FinTSConfig.fromBankingInformation(produktId, PRODUKT_VERSION, gespeichert.bankingInformation, benutzer, pin, gespeichert.tanMethodId, gespeichert.tanMedium)
+  ? FinTSConfig.fromBankingInformation(produktId, PRODUKT_VERSION, gespeichert.bankingInformation, benutzer, pin, gespeichert.tanMethodId)
   : FinTSConfig.forFirstTimeUse(produktId, PRODUKT_VERSION, url, blz, benutzer, pin, process.env.FINTS_KUNDEN_ID);
 config.debugEnabled = process.env.FINTS_DEBUG === 'true';
 const client = new FinTSClient(config);
+if (gespeichert?.tanMedium) setzeTanMedium(config, gespeichert.tanMedium);
 
 try {
   let tanMethodId = gespeichert?.tanMethodId;
@@ -100,7 +102,8 @@ try {
     const tm = config.selectedTanMethod;
     const ERFORDERLICH = 2, OPTIONAL = 1;
     let synchronisiert = false;
-    if (tm?.tanMediaRequirement === ERFORDERLICH && !process.env.FINTS_TAN_MEDIUM) {
+    const wunsch = process.env.FINTS_TAN_MEDIUM?.trim();
+    if (tm?.tanMediaRequirement === ERFORDERLICH) {
       console.log('TAN-Medien bei der Bank abfragen …');
       tm.tanMediaRequirement = OPTIONAL;
       try {
@@ -115,15 +118,16 @@ try {
       if (medien.length) {
         console.log('Von der Bank gemeldete TAN-Medien:');
         medien.forEach((m, i) => console.log(`  [${i + 1}] ${m}`));
-        const nr = medien.length > 1 ? Number(await rl.question('Nummer wählen: ')) - 1 : 0;
-        client.selectTanMedia(medien[nr] ?? medien[0]);
+        const nr = medien.includes(wunsch) ? medien.indexOf(wunsch)
+          : medien.length > 1 ? Number(await rl.question('Nummer wählen: ')) - 1 : 0;
+        setzeTanMedium(config, medien[nr] ?? medien[0]);
         console.log(`Gewählt: ${config.tanMediaName}`);
       }
     }
     if (tm?.tanMediaRequirement === ERFORDERLICH && !config.tanMediaName) {
-      const medium = process.env.FINTS_TAN_MEDIUM || (await rl.question(
+      const medium = wunsch || (await rl.question(
         'Gerätebezeichnung des pushTAN-Geräts (steht im Online-Banking unter pushTAN-Verwaltung bzw. in der S-pushTAN-App): ')).trim();
-      if (medium) client.selectTanMedia(medium);
+      setzeTanMedium(config, medium);
       synchronisiert = false;
     }
     tanMedium = config.tanMediaName;
