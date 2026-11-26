@@ -1,4 +1,4 @@
-import { BERECHNET, monatsGrenzen, positionen, naechsteNummer, empfaengerText, passendeRechnung, vormonat, tagStr } from './rechnungsLogik.js';
+import { mahnEinstellungen, naechsteMahnstufe, neueMahnung, BERECHNET, monatsGrenzen, positionen, naechsteNummer, empfaengerText, passendeRechnung, vormonat, tagStr } from './rechnungsLogik.js';
 import { starteTagesplan } from './zeitplan.js';
 
 const ZAHLUNGSZIEL_TAGE = 14;
@@ -76,6 +76,32 @@ export function erstelleRechnungsDienst(knex, { env = process.env, log = console
     return treffer;
   }
 
+  // Offene Rechnungen, für die jetzt die nächste Mahnstufe fällig ist
+  async function faelligeMahnungen(heute = new Date()) {
+    const e = mahnEinstellungen(env);
+    const offene = await knex('rechnungen').where({ status: 'offen' }).where('mahnstufe', '<', 3).orderBy('faellig_am');
+    const mahnungen = await knex('mahnungen').whereIn('rechnung_id', offene.map((r) => r.id)).orderBy('stufe');
+    return offene.map((r) => {
+      const letzte = mahnungen.filter((m) => m.rechnung_id === r.id).at(-1);
+      return { rechnung: r, stufe: naechsteMahnstufe(r, letzte, e, heute) };
+    }).filter((x) => x.stufe);
+  }
+
+  // Legt die nächste Mahnstufe an (nur wenn fällig, außer `erzwingen`)
+  async function mahnen(rechnungId, { erzwingen = false, heute = new Date() } = {}) {
+    const e = mahnEinstellungen(env);
+    return knex.transaction(async (trx) => {
+      const r = await trx('rechnungen').where({ id: rechnungId }).forUpdate().first();
+      if (!r || r.status !== 'offen' || r.mahnstufe >= 3) return null;
+      const letzte = await trx('mahnungen').where({ rechnung_id: r.id }).orderBy('stufe', 'desc').first();
+      const stufe = naechsteMahnstufe(r, letzte, e, heute) ?? (erzwingen ? r.mahnstufe + 1 : null);
+      if (!stufe) return null;
+      const [m] = await trx('mahnungen').insert(neueMahnung(r, stufe, e, heute)).returning('*');
+      await trx('rechnungen').where({ id: r.id }).update({ mahnstufe: stufe });
+      return m;
+    });
+  }
+
   // Täglich 06:00; am 1. des Monats Rechnungen für den Vormonat. Abgleich nach jedem FinTS-Abruf.
   function starteZeitplan() {
     return starteTagesplan('Rechnungslauf', [env.RECHNUNG_LAUFZEIT || '06:00'], async () => {
@@ -84,7 +110,7 @@ export function erstelleRechnungsDienst(knex, { env = process.env, log = console
     }, log);
   }
 
-  return { vorschau, lauf, stornieren, abgleichen, starteZeitplan };
+  return { vorschau, lauf, stornieren, abgleichen, faelligeMahnungen, mahnen, starteZeitplan };
 }
 
 export { BERECHNET };

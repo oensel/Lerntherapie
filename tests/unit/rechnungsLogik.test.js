@@ -27,3 +27,20 @@ test('Zahlungsabgleich über Nummer im Verwendungszweck und Betrag', () => {
 
 test('Vormonat über den Jahreswechsel', () => assert.equal(vormonat(new Date(2027, 0, 1)), '2026-12'));
 test('Empfänger', () => assert.equal(empfaengerText({ vorname: 'A', nachname: 'B', sorgeberechtigte: 'Eva B', adresse: 'Weg 1\n12345 Ort', kostentraeger: 'eltern' }), 'Eva B\nWeg 1\n12345 Ort'));
+
+import { naechsteMahnstufe, neueMahnung } from '../../src/services/rechnungsLogik.js';
+const E = { karenzTage: 7, fristTage: 10, gebuehren: [0, 500, 1000] };
+const re = { id: 1, status: 'offen', mahnstufe: 0, faellig_am: '2026-12-15' };
+
+test('Erinnerung erst nach Fälligkeit + Karenz', () => {
+  assert.equal(naechsteMahnstufe(re, null, E, new Date(2026, 11, 22)), null);
+  assert.equal(naechsteMahnstufe(re, null, E, new Date(2026, 11, 23)), 1);
+  assert.equal(naechsteMahnstufe({ ...re, status: 'bezahlt' }, null, E, new Date(2027, 1, 1)), null);
+});
+test('Folgestufe nach Ablauf der Mahnfrist, höchstens 3', () => {
+  const m = { frist: '2027-01-02' };
+  assert.equal(naechsteMahnstufe({ ...re, mahnstufe: 1 }, m, E, new Date(2027, 0, 9)), null);
+  assert.equal(naechsteMahnstufe({ ...re, mahnstufe: 1 }, m, E, new Date(2027, 0, 10)), 2);
+  assert.equal(naechsteMahnstufe({ ...re, mahnstufe: 3 }, m, E, new Date(2027, 5, 1)), null);
+});
+test('Mahnung mit Frist und Gebühr', () => assert.deepEqual(neueMahnung(re, 2, E, new Date(2027, 0, 10)), { rechnung_id: 1, stufe: 2, datum: '2027-01-10', frist: '2027-01-20', gebuehr_cent: 500 }));

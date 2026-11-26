@@ -42,12 +42,12 @@ async function api(pfad, { methode = 'GET', daten } = {}) {
 let KL = [];
 let T = [];
 let RE = []; // erstellte Rechnungen
-const R = { monat: null, vorschau: null, auswahl: null };
+const R = { monat: null, vorschau: null, auswahl: null, mahn: [] };
 const monatVon = (d) => tagStr(d).slice(0, 7);
 const vormonatStr = () => { const d = new Date(); return monatVon(new Date(d.getFullYear(), d.getMonth() - 1, 1)); };
 const monatText = (m) => monatName(new Date(m + '-01T12:00'));
 const RST = { offen: ['Offen', '--plan'], bezahlt: ['Bezahlt', '--ok'], storniert: ['Storniert', '--abs'], ueberfaellig: ['Überfällig', '--unent'] };
-const reSt = (r) => { const s = r.status === 'offen' && tagStr(new Date(r.faellig_am)) < heute() ? 'ueberfaellig' : r.status; return `<span class="st" style="--c:var(${RST[s][1]})">${RST[s][0]}</span>`; };
+const reSt = (r) => { const s = r.status === 'offen' && tagStr(new Date(r.faellig_am)) < heute() ? 'ueberfaellig' : r.status; return `<span class="st" style="--c:var(${RST[s][1]})">${RST[s][0]}${r.status === 'offen' && r.mahnstufe ? ` · ${r.mahnstufe}. Stufe` : ''}</span>`; };
 const S = { woche: montag(new Date()), fehler: null };
 
 function abbildenTermin(t) {
@@ -101,7 +101,7 @@ async function ladeUmsaetze() {
 
 async function ladeVorschau() {
   const m = R.monat ||= vormonatStr();
-  try { R.vorschau = await api(`/rechnungen/vorschau?monat=${m}`); } catch (e) { S.fehler = e.message; }
+  try { [R.vorschau, R.mahn] = await Promise.all([api(`/rechnungen/vorschau?monat=${m}`), api('/rechnungen/mahnungen/faellig')]); } catch (e) { S.fehler = e.message; }
 }
 
 // ---------- Ansichten ----------
@@ -187,14 +187,16 @@ ${tab === 'hist' ? `<div class="tl">${hist.map((t) => `<div style="--c:var(${ST[
     const monate = Array.from({ length: 12 }, (_, i) => { const d = new Date(); return monatVon(new Date(d.getFullYear(), d.getMonth() - i, 1)); });
     return `<div class="row"><div><h1>Rechnungen</h1><p class="sub">Automatischer Lauf am 1. jedes Monats, 06:00 Uhr (nächster: ${datum(lauf)}) · Zahlungseingänge werden nach jedem Kontoabruf zugeordnet</p></div><span class="sp"></span><button data-abgleich>Zahlungen abgleichen</button></div>
 <div class="row"><div class="card" style="flex:1"><div class="sub" style="margin:0">Offen</div><b style="font-size:20px">${eur(summeOffen / 100)}</b> <span class="sub">(${offen.length})</span></div><div class="card" style="flex:1"><div class="sub" style="margin:0">Überfällig</div><b style="font-size:20px">${offen.filter((r) => tagStr(new Date(r.faellig_am)) < heute()).length}</b></div></div>
+${R.mahn.length ? `<div class="card" style="margin-bottom:14px"><h2>Fällige Mahnungen</h2><table class="stack"><thead><tr><th>Nr.</th><th>Klient</th><th>Fällig seit</th><th class="n">Betrag</th><th></th></tr></thead><tbody>${R.mahn.map((r) => `<tr><td>${esc(r.nummer)}</td><td>${esc(r.klient_name)}</td><td>${datum(r.faellig_am)}</td><td class="n">${eur(r.betrag_cent / 100)}</td><td class="n"><button data-mahnen="${r.id}">${esc(r.faellige_art)} erstellen</button></td></tr>`).join('')}</tbody></table><p class="hint">Vor dem Mahnen „Zahlungen abgleichen“, damit eingegangene Zahlungen berücksichtigt sind.</p></div>` : ''}
 <div class="grid"><div class="card"><div class="row"><h2 style="margin:0">Abrechnung</h2><span class="sp"></span><select data-remonat style="width:auto">${monate.map((x) => `<option value="${x}" ${x === m ? 'selected' : ''}>${monatText(x)}</option>`).join('')}</select></div>
 <table class="stack"><thead><tr><th>Klient</th><th class="n">Einheiten</th><th class="n">Betrag</th></tr></thead><tbody>${!vs ? '<tr><td colspan="3" class="sub">Lädt …</td></tr>' : vs.map((v) => `<tr><td>${esc(v.name)}${v.bereits_berechnet ? ' <span class="st" style="--c:var(--ok)">berechnet</span>' : ''}${v.ohne_status ? ` <span class="st" style="--c:var(--aus)">${v.ohne_status} ohne Status</span>` : ''}${v.noch_geplant ? ` <span class="sub">${v.noch_geplant} noch geplant</span>` : ''}</td><td class="n">${v.positionen.length}</td><td class="n">${eur(v.betrag_cent / 100)}</td></tr>`).join('') || '<tr><td colspan="3" class="sub">Nichts abzurechnen.</td></tr>'}</tbody></table>
 <p class="hint">Berechnet werden stattgefundene, ausgefallene und unentschuldigte Termine. Vergangene Termine ohne Status bitte vorher prüfen – sie werden nicht berechnet.</p><div class="row"><span class="sp"></span><button class="pri" data-lauf ${neu.length ? '' : 'disabled'}>${neu.length} Rechnung${neu.length === 1 ? '' : 'en'} erstellen</button></div>
 <h2 style="margin-top:20px">Erstellte Rechnungen</h2><table class="stack"><thead><tr><th>Nr.</th><th>Klient</th><th>Monat</th><th class="n">Betrag</th><th>Status</th></tr></thead><tbody>${RE.map((r) => `<tr data-re="${r.id}" style="cursor:pointer${p?.id === r.id ? ';background:var(--sel, #eef3f6)' : ''}"><td>${esc(r.nummer)}</td><td>${esc(r.klient_name)}</td><td>${monatText(r.leistungsmonat)}</td><td class="n">${eur(r.betrag_cent / 100)}</td><td>${reSt(r)}</td></tr>`).join('') || '<tr><td colspan="5" class="sub">Noch keine Rechnungen erstellt.</td></tr>'}</tbody></table></div>
 <div>${p ? `<div class="paper"><div class="row"><div><h3>Rechnung ${esc(p.nummer)}</h3>${datum(p.rechnungsdatum)} · fällig ${datum(p.faellig_am)}</div><span class="sp"></span>${reSt(p)}</div><p style="white-space:pre-line">${esc(p.empfaenger)}</p><p>betr. ${esc(p.klient_name)} · Leistungszeitraum: ${monatText(p.leistungsmonat)}</p>
 <table><thead><tr><th>Datum</th><th>Leistung</th><th class="n">Betrag</th></tr></thead><tbody>${p.positionen.map((x) => `<tr><td>${datum(x.datum)}</td><td>${esc(x.beschreibung)}</td><td class="n">${eur(x.betrag_cent / 100)}</td></tr>`).join('')}<tr><td></td><td><b>Gesamt</b></td><td class="n"><b>${eur(p.betrag_cent / 100)}</b></td></tr></tbody></table>
+${p.mahnungen?.length ? `<p><b>Mahnungen</b><br>${p.mahnungen.map((x) => `<a href="/api/rechnungen/mahnungen/${x.id}/pdf" target="_blank">${esc(x.art)}</a> vom ${datum(x.datum)}, Frist ${datum(x.frist)}${x.gebuehr_cent ? `, Gebühr ${eur(x.gebuehr_cent / 100)}` : ''}`).join('<br>')}</p>` : ''}
 ${p.bezahlt_am ? `<p class="sub">Bezahlt am ${datum(p.bezahlt_am)}${p.umsatz_id ? ' (Kontoumsatz zugeordnet)' : ''}</p>` : ''}</div>
-<div class="row" style="margin-top:8px"><a href="/api/rechnungen/${p.id}/pdf" target="_blank" class="btn">PDF öffnen</a>${p.status === 'offen' ? '<button data-rest="bezahlt">Als bezahlt markieren</button><button data-rest="storniert">Stornieren</button>' : p.status === 'bezahlt' ? '<button data-rest="offen">Wieder offen</button>' : ''}</div>` : '<p class="sub">Rechnung in der Liste auswählen.</p>'}</div></div>`;
+<div class="row" style="margin-top:8px"><a href="/api/rechnungen/${p.id}/pdf" target="_blank" class="btn">PDF öffnen</a>${p.status === 'offen' ? `<button data-rest="bezahlt">Als bezahlt markieren</button>${p.mahnstufe < 3 && tagStr(new Date(p.faellig_am)) < heute() ? `<button data-mahnen="${p.id}" data-sofort>${['Zahlungserinnerung', 'Mahnung', 'Letzte Mahnung'][p.mahnstufe]} erstellen</button>` : ''}<button data-rest="storniert">Stornieren</button>` : p.status === 'bezahlt' ? '<button data-rest="offen">Wieder offen</button>' : ''}</div>` : '<p class="sub">Rechnung in der Liste auswählen.</p>'}</div></div>`;
   },
 
   umsaetze() {
@@ -221,7 +223,7 @@ function ansicht() {
 
 function render() {
   const v = ansicht();
-  nav.innerHTML = nav.firstElementChild.outerHTML + NAV.map(([i, l]) => `<a href="#${i}" class="${v === i || (v === 'akte' && i === 'klienten') ? 'on' : ''}">${l}${i === 'uebersicht' && offen().length ? `<span class="badge">${offen().length}</span>` : ''}${i === 'umsaetze' && U.neu ? `<span class="badge" title="neue Umsätze">${U.neu}</span>` : ''}</a>`).join('');
+  nav.innerHTML = nav.firstElementChild.outerHTML + NAV.map(([i, l]) => `<a href="#${i}" class="${v === i || (v === 'akte' && i === 'klienten') ? 'on' : ''}">${l}${i === 'uebersicht' && offen().length ? `<span class="badge">${offen().length}</span>` : ''}${i === 'rechnungen' && R.mahn.length ? `<span class="badge" title="fällige Mahnungen">${R.mahn.length}</span>` : ''}${i === 'umsaetze' && U.neu ? `<span class="badge" title="neue Umsätze">${U.neu}</span>` : ''}</a>`).join('');
   const fokus = document.activeElement?.matches?.('[data-suche]');
   main.innerHTML = (S.fehler ? `<div class="err">${esc(S.fehler)}</div>` : '') + V[v]();
   if (fokus) { const f = main.querySelector('[data-suche]'); f.focus(); f.setSelectionRange(f.value.length, f.value.length); }
@@ -280,7 +282,7 @@ function materialDialog(id) {
 // ---------- Ereignisse ----------
 document.addEventListener('click', (e) => {
   if (e.target === pop) return schliessen();
-  const b = e.target.closest('[data-term],[data-set],[data-close],[data-send],[data-material],[data-go],[data-kl],[data-tab],[data-edit],[data-archive],[data-doku],[data-arch],[data-neutermin],[data-woche],[data-loesch],[data-abruf],[data-re],[data-rest],[data-lauf],[data-abgleich]');
+  const b = e.target.closest('[data-term],[data-set],[data-close],[data-send],[data-material],[data-go],[data-kl],[data-tab],[data-edit],[data-archive],[data-doku],[data-arch],[data-neutermin],[data-woche],[data-loesch],[data-abruf],[data-re],[data-rest],[data-lauf],[data-abgleich],[data-mahnen]');
   if (!b) return;
   const d = b.dataset;
   if (d.term) return statusDialog(d.term);
@@ -304,6 +306,11 @@ document.addEventListener('click', (e) => {
     const id = R.auswahl.id;
     return aktion(async () => { await api(`/rechnungen/${id}/status`, { methode: 'PUT', daten: { status: d.rest } }); R.auswahl = await api(`/rechnungen/${id}`); await ladeVorschau(); });
   }
+  if (d.mahnen) return aktion(async () => {
+    const m = await api(`/rechnungen/${d.mahnen}/mahnung`, { methode: 'POST', daten: { erzwingen: 'sofort' in d } });
+    R.auswahl = await api(`/rechnungen/${d.mahnen}`); await ladeVorschau();
+    window.open(`/api/rechnungen/mahnungen/${m.id}/pdf`, '_blank');
+  });
   if ('lauf' in d) return aktion(async () => { const { erstellt } = await api('/rechnungen/lauf', { methode: 'POST', daten: { monat: R.monat } }); if (erstellt[0]) R.auswahl = await api(`/rechnungen/${erstellt[0].id}`); await ladeVorschau(); });
   if ('abgleich' in d) return aktion(async () => { const { bezahlt } = await api('/rechnungen/abgleich', { methode: 'POST' }); if (!bezahlt.length) alert('Keine neuen Zahlungen gefunden.'); });
   if ('abruf' in d) { api('/umsaetze/abruf', { methode: 'POST' }).then(async () => { await ladeUmsatzStatus(); render(); }); }
@@ -377,7 +384,7 @@ addEventListener('keydown', (e) => { if (e.key === 'Escape') schliessen(); });
   try { await laden(); } catch (e) { S.fehler = `Daten konnten nicht geladen werden: ${e.message}`; }
   await ladeUmsatzStatus();
   if (location.hash === '#umsaetze') await ladeUmsaetze();
-  if (location.hash === '#rechnungen') await ladeVorschau();
+  await ladeVorschau();
   render();
 })();
 // Zähler und Daten jede Minute aktualisieren (z.B. neue Umsätze nach dem Abruf um 08:00/16:00)

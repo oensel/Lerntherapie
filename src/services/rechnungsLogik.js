@@ -50,3 +50,28 @@ export function passendeRechnung(umsatz, offene) {
 }
 
 export const ueberfaellig = (r, heute = tagStr(new Date())) => r.status === 'offen' && tagStr(new Date(r.faellig_am)) < heute;
+
+// ---------- Mahnwesen ----------
+export const MAHNSTUFEN = { 1: 'Zahlungserinnerung', 2: 'Mahnung', 3: 'Letzte Mahnung' };
+
+export function mahnEinstellungen(env = process.env) {
+  const zahl = (v, std) => (v === undefined || v === '' || Number.isNaN(Number(v)) ? std : Number(v));
+  return {
+    karenzTage: zahl(env.MAHN_KARENZ_TAGE, 7), // nach Fälligkeit bzw. nach Ablauf der letzten Mahnfrist
+    fristTage: zahl(env.MAHN_FRIST_TAGE, 10), // neue Zahlungsfrist je Mahnung
+    gebuehren: [0, zahl(env.MAHN_GEBUEHR_2_CENT, 0), zahl(env.MAHN_GEBUEHR_3_CENT, 0)], // Stufe 1 immer kostenfrei
+  };
+}
+
+const plusTage = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+
+// Nächste fällige Mahnstufe oder null: offen, Frist (Fälligkeit bzw. letzte Mahnfrist) + Karenz verstrichen, Stufe < 3
+export function naechsteMahnstufe(r, letzteMahnung, { karenzTage }, heute = new Date()) {
+  if (r.status !== 'offen' || r.mahnstufe >= 3) return null;
+  const frist = letzteMahnung ? letzteMahnung.frist : r.faellig_am;
+  return tagStr(plusTage(new Date(frist), karenzTage)) < tagStr(heute) ? r.mahnstufe + 1 : null;
+}
+
+export function neueMahnung(r, stufe, { fristTage, gebuehren }, heute = new Date()) {
+  return { rechnung_id: r.id, stufe, datum: tagStr(heute), frist: tagStr(plusTage(heute, fristTage)), gebuehr_cent: gebuehren[stufe - 1] ?? 0 };
+}

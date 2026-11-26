@@ -1,6 +1,6 @@
 import { Router } from 'express';
-import { erstelleRechnungPdf } from '../services/rechnungPdf.js';
-import { vormonat } from '../services/rechnungsLogik.js';
+import { erstelleRechnungPdf, erstelleMahnungPdf } from '../services/rechnungPdf.js';
+import { vormonat, MAHNSTUFEN } from '../services/rechnungsLogik.js';
 
 const MONAT = /^\d{4}-(0[1-9]|1[0-2])$/;
 
@@ -33,10 +33,31 @@ export function getRechnungenRoutes(knex, dienst) {
 
   r.post('/abgleich', async (_req, res) => res.json({ bezahlt: await dienst.abgleichen() }));
 
+  // Mahnwesen
+  r.get('/mahnungen/faellig', async (_req, res) => {
+    res.json((await dienst.faelligeMahnungen()).map(({ rechnung, stufe }) => ({ ...rechnung, faellige_stufe: stufe, faellige_art: MAHNSTUFEN[stufe] })));
+  });
+
+  r.post('/:id/mahnung', async (req, res) => {
+    const m = await dienst.mahnen(req.params.id, { erzwingen: req.body?.erzwingen === true });
+    if (!m) return res.status(409).json({ fehler: 'Keine Mahnung fällig (bezahlt, storniert, Frist läuft noch oder Stufe 3 erreicht)' });
+    res.status(201).json(m);
+  });
+
+  r.get('/mahnungen/:mid/pdf', async (req, res) => {
+    const m = await knex('mahnungen').where({ id: req.params.mid }).first();
+    if (!m) return res.status(404).json({ fehler: 'Mahnung nicht gefunden' });
+    const re = await knex('rechnungen').where({ id: m.rechnung_id }).first();
+    const [{ s }] = await knex('mahnungen').where({ rechnung_id: re.id }).where('stufe', '<=', m.stufe).sum({ s: 'gebuehr_cent' });
+    const pdf = await erstelleMahnungPdf(re, m, Number(s || 0), MAHNSTUFEN[m.stufe]);
+    res.type('application/pdf').set('content-disposition', `inline; filename="${MAHNSTUFEN[m.stufe].replace(/ /g, '-')}-${re.nummer}.pdf"`).send(Buffer.from(pdf));
+  });
+
   r.get('/:id', async (req, res) => {
     const re = await knex('rechnungen').where({ id: req.params.id }).first();
     if (!re) return res.status(404).json({ fehler: 'Rechnung nicht gefunden' });
     re.positionen = await knex('rechnungspositionen').where({ rechnung_id: re.id }).orderBy(['datum', 'id']);
+    re.mahnungen = (await knex('mahnungen').where({ rechnung_id: re.id }).orderBy('stufe')).map((m) => ({ ...m, art: MAHNSTUFEN[m.stufe] }));
     res.json(re);
   });
 
