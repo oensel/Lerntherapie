@@ -9,7 +9,8 @@ Praxisverwaltung für eine Lerntherapie-Praxis: Klienten, Termine und Kalender (
 - Terminstatus: geplant | stattgefunden | abgesagt (≥ 24 h, kostenfrei) | ausgefallen | unentschuldigt (beide berechnet)
 - Routen als Factories mit Knex-DI: `src/routes/*Routes.js` exportiert `getXRoutes(knex)`, gemountet in `src/app.js`
 - Kontoumsätze: `lib-fints`, Abruf täglich 08:00/16:00 (`src/services/fintsAbruf.js`, `zeitplan.js`, `umsatzDienst.js`); neue Umsätze = `umsaetze.gesehen=false` → Zähler in der Navigation. Ersteinrichtung mit `npm run fints:test` (schreibt `data/fints-bankinfo.json`, der erste Abruf übernimmt sie in `fints_zustand`)
-- Geplant: `imapflow` + `nodemailer` (Mail), `pdf-lib` (Rechnungen), JWT-Login
+- Rechnungen: `src/services/rechnungsDienst.js` (Vorschau, Lauf am 1. 06:00 für den Vormonat, Storno, Zahlungsabgleich nach jedem FinTS-Abruf über Rechnungsnummer im Verwendungszweck), Logik in `rechnungsLogik.js`, PDF mit `pdf-lib` (`rechnungPdf.js`, Praxisdaten aus `PRAXIS_*` in der `.env`). Positionen sind eingefroren, abgerechnete Termine tragen `rechnung_id`; Nummern `JJJJ-MM-NNN`
+- Geplant: `imapflow` + `nodemailer` (Mail, Rechnungsversand), Mahnwesen, JWT-Login
 
 ## Commands
 - `npm run pg:start` — lokales PostgreSQL (Daten in `data/pg-lokal`, Port aus `DB_PORT` in `.env`)

@@ -57,3 +57,4 @@ td.n{text-align:right;white-space:nowrap}tr.click{cursor:pointer}tr.click:hover{
 .err{background:color-mix(in srgb,var(--unent) 14%,var(--bg));border-left:4px solid var(--unent);padding:10px 12px;border-radius:8px;margin:0 0 14px}
 @media(max-width:760px){.cal{display:none}.agenda{display:block}}
 .dlg{max-height:calc(100dvh - 32px);overflow-y:auto}
+.btn{display:inline-flex;align-items:center;text-decoration:none}
