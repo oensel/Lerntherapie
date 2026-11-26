@@ -94,17 +94,44 @@ try {
     client.selectTanMethod(tanMethodId);
     // Verlangt die Bank eine Gerätebezeichnung (z.B. Sparkasse bei pushTAN), muss der Name des registrierten Geräts mit,
     // sonst sendet lib-fints "default" und die Bank antwortet mit 9955 "Gerätebezeichnung ist unbekannt".
+    // Deshalb zuerst die TAN-Medien von der Bank holen (HKTAB): lib-fints hängt HKTAB an die Synchronisierung an, sobald ein
+    // Medium erlaubt ist. Für diese eine Synchronisierung gilt das Medium als "optional", damit kein Name mitgeschickt wird;
+    // den gelieferten Namen übernehmen wir danach 1:1.
     const tm = config.selectedTanMethod;
-    if (tm?.activeTanMedia?.length) {
-      client.selectTanMedia(tm.activeTanMedia[0]);
-    } else if (tm?.tanMediaRequirement === 2) {
+    const ERFORDERLICH = 2, OPTIONAL = 1;
+    let synchronisiert = false;
+    if (tm?.tanMediaRequirement === ERFORDERLICH && !process.env.FINTS_TAN_MEDIUM) {
+      console.log('TAN-Medien bei der Bank abfragen …');
+      tm.tanMediaRequirement = OPTIONAL;
+      try {
+        await mitTan(() => client.synchronize(), (ref, tan) => client.synchronizeWithTan(ref, tan));
+        synchronisiert = true;
+      } catch (e) {
+        console.log(`  Abfrage ohne Gerätenamen nicht möglich (${e.message}).`);
+      } finally {
+        tm.tanMediaRequirement = ERFORDERLICH;
+      }
+      const medien = tm.activeTanMedia ?? [];
+      if (medien.length) {
+        console.log('Von der Bank gemeldete TAN-Medien:');
+        medien.forEach((m, i) => console.log(`  [${i + 1}] ${m}`));
+        const nr = medien.length > 1 ? Number(await rl.question('Nummer wählen: ')) - 1 : 0;
+        client.selectTanMedia(medien[nr] ?? medien[0]);
+        console.log(`Gewählt: ${config.tanMediaName}`);
+      }
+    }
+    if (tm?.tanMediaRequirement === ERFORDERLICH && !config.tanMediaName) {
       const medium = process.env.FINTS_TAN_MEDIUM || (await rl.question(
         'Gerätebezeichnung des pushTAN-Geräts (steht im Online-Banking unter pushTAN-Verwaltung bzw. in der S-pushTAN-App): ')).trim();
       if (medium) client.selectTanMedia(medium);
+      synchronisiert = false;
     }
     tanMedium = config.tanMediaName;
-    console.log('Zweite Synchronisierung mit TAN-Verfahren …');
-    sync = await mitTan(() => client.synchronize(), (ref, tan) => client.synchronizeWithTan(ref, tan));
+    // Konten (UPD) fehlen noch, wenn die Synchronisierung oben nicht durchging oder ohne Medium nicht möglich war
+    if (!synchronisiert || !config.bankingInformation?.upd?.bankAccounts?.length) {
+      console.log('Synchronisierung mit TAN-Verfahren …');
+      sync = await mitTan(() => client.synchronize(), (ref, tan) => client.synchronizeWithTan(ref, tan));
+    }
   }
 
   const konten = config.bankingInformation?.upd?.bankAccounts ?? [];
