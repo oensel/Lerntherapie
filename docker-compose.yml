@@ -1,0 +1,38 @@
+# Lerntherapie-Manager auf dem Home-Server (Proxmox-LXC/VM mit Docker).
+#   cp .env.example .env   # Passwörter setzen
+#   docker compose up -d --build
+# Für die lokale Entwicklung nur die Datenbank:  docker compose up -d db
+services:
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_AUTO_MIGRATE: "true"
+    ports:
+      - "${PORT:-3000}:3000"
+    restart: unless-stopped
+
+  db:
+    image: postgres:19-alpine
+    environment:
+      POSTGRES_USER: ${DB_USER:-lerntherapie}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-lerntherapie}
+      POSTGRES_DB: ${DB_NAME:-lerntherapie}
+    ports:
+      - "127.0.0.1:${DB_PORT_HOST:-5432}:5432"
+    volumes:
+      - pgdaten:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pgdaten:
