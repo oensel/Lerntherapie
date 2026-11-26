@@ -42,6 +42,10 @@ async function api(pfad, { methode = 'GET', daten } = {}) {
 let KL = [];
 let T = [];
 let RE = []; // erstellte Rechnungen
+let EIN = { stundensatz_cent: 0, ausfall_cent: 0, unentschuldigt_cent: 0 }; // allgemeine Sätze
+const SATZ = [['stundensatz_cent', 'Therapiestunde (stattgefunden)'], ['ausfall_cent', 'Ausfall (< 24 h abgesagt)'], ['unentschuldigt_cent', 'Nicht erschienen (unentschuldigt)']];
+const satzVon = (roh, f) => roh?.[f] ?? EIN[f];
+const centAusEingabe = (v) => (String(v).trim() === '' ? null : Math.round(parseFloat(String(v).replace(',', '.')) * 100));
 const R = { monat: null, vorschau: null, auswahl: null, mahn: [] };
 const monatVon = (d) => tagStr(d).slice(0, 7);
 const vormonatStr = () => { const d = new Date(); return monatVon(new Date(d.getFullYear(), d.getMonth() - 1, 1)); };
@@ -66,7 +70,7 @@ function abbildenKlient(k) {
     schwer: k.schwerpunkt || '—',
     kontakt: [k.sorgeberechtigte, k.telefon].filter(Boolean).join(' · ') || '—',
     email: k.email,
-    satz: (k.stundensatz_cent ?? 0) / 100,
+    satz: satzVon(k, 'stundensatz_cent') / 100,
     kostentraeger: KT[k.kostentraeger] ?? k.kostentraeger,
     seit: k.aufnahme_datum,
     aktiv: k.aktiv,
@@ -78,8 +82,8 @@ function abbildenKlient(k) {
 }
 
 async function laden() {
-  const [kl, te, re] = await Promise.all([api('/klienten?archiv=true'), api('/termine'), api('/rechnungen')]);
-  RE = re;
+  const [kl, te, re, ein] = await Promise.all([api('/klienten?archiv=true'), api('/termine'), api('/rechnungen'), api('/einstellungen')]);
+  RE = re; EIN = ein;
   T = te.map(abbildenTermin);
   KL = kl.map(abbildenKlient);
 }
@@ -160,7 +164,7 @@ ${zeig.map((k) => { const n = T.filter((t) => t.k === k.id && t.s === 'geplant' 
 <div class="row">${['stattgefunden', 'ausgefallen', 'unentschuldigt', 'abgesagt'].map((s) => `<div class="card" style="flex:1;min-width:130px"><div style="font-size:24px;font-weight:700">${z(s)}</div>${st(s)}</div>`).join('')}</div>
 <div class="tabs">${[['hist', 'Terminhistorie'], ['stamm', 'Stammdaten'], ['re', 'Rechnungen']].map(([i, l]) => `<button data-tab="${i}" class="${tab === i ? 'on' : ''}">${l}</button>`).join('')}</div>
 ${tab === 'hist' ? `<div class="tl">${hist.map((t) => `<div style="--c:var(${ST[t.s][1]})"><b>${fd(t.d)} ${ft(t.d)}</b> · ${st(t.s)} <button data-term="${t.id}" style="min-height:30px;font-size:13px;margin-left:6px">ändern</button><div>${t.txt ? esc(t.txt) : '<span class="sub">Keine Aufzeichnung</span>'}</div></div>`).join('') || '<p class="sub">Noch keine Termine.</p>'}</div>`
-      : tab === 'stamm' ? `<div class="grid"><div class="card"><label>Kontakt (Erziehungsberechtigte)</label>${esc(k.kontakt)}<label>E-Mail</label>${esc(k.email || '—')}<label>Jahrgang</label>${esc(k.geb)}<label>In Therapie seit</label>${k.seit ? datum(k.seit) : k.erster ? 'Ersttermin ' + fd(k.erster) : '—'}</div><div class="card"><label>Rechnungsempfänger</label>${esc(k.kostentraeger)}<label>Abrechnung</label>Stattgefunden + ausgefallen + unentschuldigt; abgesagt (≥ 24 h) kostenfrei</div></div>`
+      : tab === 'stamm' ? `<div class="grid"><div class="card"><label>Kontakt (Erziehungsberechtigte)</label>${esc(k.kontakt)}<label>E-Mail</label>${esc(k.email || '—')}<label>Jahrgang</label>${esc(k.geb)}<label>In Therapie seit</label>${k.seit ? datum(k.seit) : k.erster ? 'Ersttermin ' + fd(k.erster) : '—'}</div><div class="card"><label>Rechnungsempfänger</label>${esc(k.kostentraeger)}<label>Abrechnung je Termin</label>${SATZ.map(([f, l]) => `${l}: <b>${eur(satzVon(k.roh, f) / 100)}</b>${k.roh[f] == null ? ' <span class="sub">(Standard)</span>' : ''}`).join('<br>')}<br>Abgesagt (≥ 24 h): kostenfrei</div></div>`
         : `<table><thead><tr><th>Nr.</th><th>Monat</th><th class="n">Betrag</th><th>Status</th></tr></thead><tbody>${RE.filter((r) => r.klient_id === k.id).map((r) => `<tr><td><a href="/api/rechnungen/${r.id}/pdf" target="_blank">${esc(r.nummer)}</a></td><td>${monatText(r.leistungsmonat)}</td><td class="n">${eur(r.betrag_cent / 100)}</td><td>${reSt(r)}</td></tr>`).join('') || '<tr><td colspan="4" class="sub">Noch keine Rechnungen.</td></tr>'}</tbody></table>`}`;
   },
 
@@ -200,6 +204,14 @@ ${p.bezahlt_am ? `<p class="sub">Bezahlt am ${datum(p.bezahlt_am)}${p.umsatz_id 
 <div class="row" style="margin-top:8px"><a href="/api/rechnungen/${p.id}/pdf" target="_blank" class="btn">PDF öffnen</a>${p.status !== 'storniert' ? `<button data-mail="/rechnungen/${p.id}">${p.versendet_am ? 'Erneut per E-Mail' : 'Per E-Mail senden'}</button>` : ''}${p.status === 'offen' ? `<button data-rest="bezahlt">Als bezahlt markieren</button>${p.mahnstufe < 3 && tagStr(new Date(p.faellig_am)) < heute() ? `<button data-mahnen="${p.id}" data-sofort>${['Zahlungserinnerung', 'Mahnung', 'Letzte Mahnung'][p.mahnstufe]} erstellen</button>` : ''}<button data-rest="storniert">Stornieren</button>` : p.status === 'bezahlt' ? '<button data-rest="offen">Wieder offen</button>' : ''}</div>` : '<p class="sub">Rechnung in der Liste auswählen.</p>'}</div></div>`;
   },
 
+  einstellungen() {
+    return `<h1>Einstellungen</h1><p class="sub">Allgemeine Beträge je Termin. Sie gelten für alle Klienten ohne eigenen Betrag; abweichende Beträge stellst du im Klientendialog ein.</p>
+<form class="card" id="eform" style="max-width:520px">${SATZ.map(([f, l]) => `<label for="e-${f}">${l} (€)</label><input id="e-${f}" name="${f}" type="number" step="0.01" min="0" required value="${(EIN[f] / 100).toFixed(2)}">`).join('')}
+<p class="hint">Rechtzeitig abgesagte Termine (≥ 24 h) sind immer kostenfrei. Ein Betrag von 0 € bedeutet: wird nicht berechnet. Bereits erstellte Rechnungen ändern sich nicht.</p>
+<p class="sub">Eigene Beträge: ${KL.filter((k) => SATZ.some(([f]) => k.roh[f] != null)).map((k) => `<a href="#" data-kl="${k.id}">${esc(k.name)}</a>`).join(', ') || 'keine'}</p>
+<div class="row"><span class="sp"></span><button class="pri">Speichern</button></div></form>`;
+  },
+
   umsaetze() {
     const s = U.status;
     const ein = U.liste.filter((u) => u.betrag_cent > 0).reduce((a, u) => a + u.betrag_cent, 0);
@@ -213,7 +225,7 @@ ${U.liste.map((u) => `<tr><td>${datum(u.buchungsdatum)}${U.neuIds.has(u.id) ? ' 
 };
 
 // ---------- Rahmen ----------
-const NAV = [['uebersicht', 'Übersicht'], ['kalender', 'Kalender'], ['klienten', 'Klienten'], ['doku', 'Dokumentieren'], ['rechnungen', 'Rechnungen'], ['umsaetze', 'Umsätze']];
+const NAV = [['uebersicht', 'Übersicht'], ['kalender', 'Kalender'], ['klienten', 'Klienten'], ['doku', 'Dokumentieren'], ['rechnungen', 'Rechnungen'], ['umsaetze', 'Umsätze'], ['einstellungen', 'Einstellungen']];
 const nav = document.getElementById('nav'), main = document.getElementById('main'), pop = document.getElementById('pop'), dlg = document.getElementById('dlg');
 
 function ansicht() {
@@ -249,7 +261,7 @@ function statusDialog(id) {
 }
 
 function klientDialog(id) {
-  const k = id ? kl(id).roh : { vorname: '', nachname: '', kostentraeger: 'eltern', stundensatz_cent: 5800, material_noetig: true };
+  const k = id ? kl(id).roh : { vorname: '', nachname: '', kostentraeger: 'eltern', material_noetig: true };
   const f = (n, l, typ = 'text', extra = '') => `<label for="f-${n}">${l}</label><input id="f-${n}" name="${n}" type="${typ}" value="${esc(k[n] ?? '')}" ${extra}>`;
   dlg.innerHTML = `<h2>${id ? 'Klient bearbeiten' : 'Neuer Klient'}</h2><form id="kform" data-id="${id || ''}">
 <div class="grid" style="gap:10px"><div>${f('vorname', 'Vorname', 'text', 'required')}</div><div>${f('nachname', 'Nachname', 'text', 'required')}</div></div>
@@ -257,7 +269,9 @@ function klientDialog(id) {
 ${f('sorgeberechtigte', 'Erziehungsberechtigte')}
 <div class="grid" style="gap:10px"><div>${f('telefon', 'Telefon', 'tel')}</div><div>${f('email', 'E-Mail', 'email')}</div></div>
 <div class="grid" style="gap:10px"><div><label for="f-kt">Kostenträger</label><select id="f-kt" name="kostentraeger">${Object.entries(KT).map(([v, l]) => `<option value="${v}" ${k.kostentraeger === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
-<div><label for="f-satz">Stundensatz (€)</label><input id="f-satz" name="satz" type="number" step="0.01" min="0" value="${((k.stundensatz_cent ?? 0) / 100).toFixed(2)}"></div></div>
+<div></div></div>
+<fieldset style="border:1px solid var(--line);border-radius:8px;margin-top:12px;padding:4px 12px 12px"><legend class="sub" style="margin:0;padding:0 4px">Beträge je Termin (leer = Standard)</legend>
+<div class="grid" style="gap:10px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">${SATZ.map(([f, l]) => `<div><label for="f-${f}">${l}</label><input id="f-${f}" name="${f}" type="number" step="0.01" min="0" value="${k[f] == null ? '' : (k[f] / 100).toFixed(2)}" placeholder="${(EIN[f] / 100).toFixed(2).replace('.', ',')} € (Standard)"></div>`).join('')}</div></fieldset>
 ${f('aufnahme_datum', 'In Therapie seit', 'date')}
 <label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input type="checkbox" name="material_noetig" style="width:auto;min-height:0" ${k.material_noetig ? 'checked' : ''}> Material vor dem Ersttermin verschicken</label>
 <div class="row" style="margin-top:14px"><span class="sp"></span><button type="button" data-close>Abbrechen</button><button class="pri">Speichern</button></div></form>`;
@@ -349,11 +363,15 @@ document.addEventListener('submit', (e) => {
       geburtsjahr: w.geburtsjahr ? +w.geburtsjahr : null,
       schwerpunkt: w.schwerpunkt || null, sorgeberechtigte: w.sorgeberechtigte || null,
       telefon: w.telefon || null, email: w.email || null,
-      kostentraeger: w.kostentraeger, stundensatz_cent: Math.round(parseFloat(w.satz || '0') * 100),
+      kostentraeger: w.kostentraeger, ...Object.fromEntries(SATZ.map(([f]) => [f, centAusEingabe(w[f])])),
       aufnahme_datum: w.aufnahme_datum || null, material_noetig: 'material_noetig' in w,
     };
     schliessen();
     return aktion(() => (f.dataset.id ? api(`/klienten/${f.dataset.id}`, { methode: 'PUT', daten }) : api('/klienten', { methode: 'POST', daten })));
+  }
+  if (f.id === 'eform') {
+    const daten = Object.fromEntries(SATZ.map(([n]) => [n, centAusEingabe(f.querySelector(`#e-${n}`).value) ?? 0]));
+    return aktion(() => api('/einstellungen', { methode: 'PUT', daten }));
   }
   if (f.id === 'mform') {
     const daten = { an: f.querySelector('#m-an').value.trim(), betreff: f.querySelector('#m-b').value, text: f.querySelector('#m-t').value };

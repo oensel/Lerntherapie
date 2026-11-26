@@ -21,12 +21,18 @@ export function positionsText(termin) {
   return `Lerntherapie ${min} min${zusatz}`;
 }
 
-// Positionen eines Klienten: jeder berechnete Termin = eine Einheit zum Stundensatz
-export function positionen(termine, satzCent) {
+// Geltende Sätze eines Klienten: eigener Wert, sonst der allgemeine Standard (NULL = Standard)
+export function saetze(klient, standard) {
+  const w = (feld) => klient?.[feld] ?? standard[feld];
+  return { stattgefunden: w('stundensatz_cent'), ausgefallen: w('ausfall_cent'), unentschuldigt: w('unentschuldigt_cent') };
+}
+
+// Positionen eines Klienten: je berechnetem Termin der Betrag für seinen Status; Beträge von 0 € entfallen
+export function positionen(termine, satzJeStatus) {
   return termine
-    .filter((t) => BERECHNET.includes(t.status) && !t.rechnung_id)
+    .filter((t) => BERECHNET.includes(t.status) && !t.rechnung_id && satzJeStatus[t.status] > 0)
     .sort((a, b) => new Date(a.beginn) - new Date(b.beginn))
-    .map((t) => ({ termin_id: t.id, datum: tagStr(new Date(t.beginn)), beschreibung: positionsText(t), betrag_cent: satzCent }));
+    .map((t) => ({ termin_id: t.id, datum: tagStr(new Date(t.beginn)), beschreibung: positionsText(t), betrag_cent: satzJeStatus[t.status] }));
 }
 
 // Nächste Nummer im Format JJJJ-MM-NNN aus den bereits vergebenen Nummern desselben Präfixes

@@ -1,4 +1,4 @@
-import { mahnEinstellungen, naechsteMahnstufe, neueMahnung, BERECHNET, monatsGrenzen, positionen, naechsteNummer, empfaengerText, passendeRechnung, vormonat, tagStr } from './rechnungsLogik.js';
+import { mahnEinstellungen, naechsteMahnstufe, neueMahnung, BERECHNET, monatsGrenzen, positionen, saetze, naechsteNummer, empfaengerText, passendeRechnung, vormonat, tagStr } from './rechnungsLogik.js';
 import { starteTagesplan } from './zeitplan.js';
 
 const ZAHLUNGSZIEL_TAGE = 14;
@@ -10,10 +10,11 @@ export function erstelleRechnungsDienst(knex, { env = process.env, log = console
     const termine = await knex('termine').where('beginn', '>=', von).where('beginn', '<', bis).whereNotNull('klient_id');
     const klienten = await knex('klienten').whereIn('id', [...new Set(termine.map((t) => t.klient_id))]);
     const vorhandene = await knex('rechnungen').where({ leistungsmonat: monat }).whereNot({ status: 'storniert' }).pluck('klient_id');
+    const standard = await knex('einstellungen').where({ id: 1 }).first();
     const jetzt = new Date();
     return klienten.map((k) => {
       const eigene = termine.filter((t) => t.klient_id === k.id);
-      const pos = positionen(eigene, k.stundensatz_cent ?? 0);
+      const pos = positionen(eigene, saetze(k, standard));
       return {
         klient_id: k.id, name: `${k.vorname} ${k.nachname}`, klient: k, positionen: pos,
         betrag_cent: pos.reduce((a, p) => a + p.betrag_cent, 0),

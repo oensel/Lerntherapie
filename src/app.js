@@ -10,6 +10,7 @@ import { erstelleUmsatzDienst } from './services/umsatzDienst.js';
 import { getRechnungenRoutes } from './routes/rechnungenRoutes.js';
 import { erstelleRechnungsDienst } from './services/rechnungsDienst.js';
 import { erstelleMailDienst } from './services/mailDienst.js';
+import { getEinstellungenRoutes } from './routes/einstellungenRoutes.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
@@ -30,6 +31,7 @@ export function erstelleApp(db, { rechnungsDienst = erstelleRechnungsDienst(db),
   app.use('/api/klienten', getKlientenRoutes(db));
   app.use('/api/termine', getTermineRoutes(db));
   app.use('/api/umsaetze', getUmsaetzeRoutes(db, umsatzDienst));
+  app.use('/api/einstellungen', getEinstellungenRoutes(db));
   app.use('/api/rechnungen', getRechnungenRoutes(db, rechnungsDienst, mailDienst));
 
   app.use(express.static(path.join(__dirname, '..', 'public')));

@@ -1,14 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { positionen, naechsteNummer, passendeRechnung, vormonat, empfaengerText } from '../../src/services/rechnungsLogik.js';
+import { saetze, positionen, naechsteNummer, passendeRechnung, vormonat, empfaengerText } from '../../src/services/rechnungsLogik.js';
 
 const t = (id, tag, status, extra = {}) => ({ id, beginn: new Date(2026, 10, tag, 15), ende: new Date(2026, 10, tag, 16), status, ...extra });
 
 test('nur berechnete, noch nicht abgerechnete Termine, nach Datum', () => {
-  const p = positionen([t(1, 20, 'stattgefunden'), t(2, 5, 'ausgefallen'), t(3, 6, 'abgesagt'), t(4, 7, 'geplant'), t(5, 8, 'unentschuldigt', { rechnung_id: 9 })], 5800);
+  const p = positionen([t(1, 20, 'stattgefunden'), t(2, 5, 'ausgefallen'), t(3, 6, 'abgesagt'), t(4, 7, 'geplant'), t(5, 8, 'unentschuldigt', { rechnung_id: 9 })], { stattgefunden: 5800, ausgefallen: 2900, unentschuldigt: 5800 });
   assert.deepEqual(p.map((x) => x.termin_id), [2, 1]);
   assert.equal(p[0].beschreibung, 'Lerntherapie 60 min (Ausfall, < 24 h abgesagt)');
-  assert.equal(p[0].betrag_cent, 5800);
+  assert.equal(p[0].betrag_cent, 2900);
+  assert.equal(p[1].betrag_cent, 5800);
   assert.equal(p[0].datum, '2026-11-05');
 });
 
@@ -44,3 +45,12 @@ test('Folgestufe nach Ablauf der Mahnfrist, höchstens 3', () => {
   assert.equal(naechsteMahnstufe({ ...re, mahnstufe: 3 }, m, E, new Date(2027, 5, 1)), null);
 });
 test('Mahnung mit Frist und Gebühr', () => assert.deepEqual(neueMahnung(re, 2, E, new Date(2027, 0, 10)), { rechnung_id: 1, stufe: 2, datum: '2027-01-10', frist: '2027-01-20', gebuehr_cent: 500 }));
+
+test('Klientensatz überschreibt Standard, NULL = Standard', () => {
+  const std = { stundensatz_cent: 5800, ausfall_cent: 4000, unentschuldigt_cent: 5800 };
+  assert.deepEqual(saetze({ stundensatz_cent: 6200, ausfall_cent: null, unentschuldigt_cent: 0 }, std), { stattgefunden: 6200, ausgefallen: 4000, unentschuldigt: 0 });
+});
+test('Betrag 0 € erzeugt keine Position', () => {
+  const p = positionen([t(1, 3, 'unentschuldigt'), t(2, 4, 'stattgefunden')], { stattgefunden: 5800, ausgefallen: 0, unentschuldigt: 0 });
+  assert.deepEqual(p.map((x) => x.termin_id), [2]);
+});
