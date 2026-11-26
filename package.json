@@ -14,7 +14,8 @@
     "test:unit": "node --test \"tests/unit/**/*.test.js\"",
     "test:e2e": "playwright test",
     "pg:start": "node scripts/lokale-pg.mjs start",
-    "fints:test": "node scripts/fints-test.mjs"
+    "fints:test": "node scripts/fints-test.mjs",
+    "demo:daten": "node scripts/demo-daten.mjs"
   },
   "dependencies": {
     "dotenv": "^18.0.10",
