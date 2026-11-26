@@ -75,13 +75,14 @@ const pin = await frageVerdeckt('PIN: ');
 const gespeichert = fs.existsSync(INFO_DATEI) ? JSON.parse(fs.readFileSync(INFO_DATEI, 'utf8')) : null;
 
 const config = gespeichert
-  ? FinTSConfig.fromBankingInformation(produktId, PRODUKT_VERSION, gespeichert.bankingInformation, benutzer, pin, gespeichert.tanMethodId)
+  ? FinTSConfig.fromBankingInformation(produktId, PRODUKT_VERSION, gespeichert.bankingInformation, benutzer, pin, gespeichert.tanMethodId, gespeichert.tanMedium)
   : FinTSConfig.forFirstTimeUse(produktId, PRODUKT_VERSION, url, blz, benutzer, pin, process.env.FINTS_KUNDEN_ID);
 config.debugEnabled = process.env.FINTS_DEBUG === 'true';
 const client = new FinTSClient(config);
 
 try {
   let tanMethodId = gespeichert?.tanMethodId;
+  let tanMedium = gespeichert?.tanMedium;
   if (!gespeichert) {
     console.log('Erste Synchronisierung …');
     let sync = await mitTan(() => client.synchronize(), (ref, tan) => client.synchronizeWithTan(ref, tan));
@@ -91,8 +92,17 @@ try {
     const wahl = verfahren.length > 1 ? Number(await rl.question('Nummer wählen: ')) - 1 : 0;
     tanMethodId = verfahren[wahl]?.id ?? sync.bankingInformation?.bpd?.availableTanMethodIds?.[0];
     client.selectTanMethod(tanMethodId);
+    // Verlangt die Bank eine Gerätebezeichnung (z.B. Sparkasse bei pushTAN), muss der Name des registrierten Geräts mit,
+    // sonst sendet lib-fints "default" und die Bank antwortet mit 9955 "Gerätebezeichnung ist unbekannt".
     const tm = config.selectedTanMethod;
-    if (tm?.activeTanMedia?.length) client.selectTanMedia(tm.activeTanMedia[0]);
+    if (tm?.activeTanMedia?.length) {
+      client.selectTanMedia(tm.activeTanMedia[0]);
+    } else if (tm?.tanMediaRequirement === 2) {
+      const medium = process.env.FINTS_TAN_MEDIUM || (await rl.question(
+        'Gerätebezeichnung des pushTAN-Geräts (steht im Online-Banking unter pushTAN-Verwaltung bzw. in der S-pushTAN-App): ')).trim();
+      if (medium) client.selectTanMedia(medium);
+    }
+    tanMedium = config.tanMediaName;
     console.log('Zweite Synchronisierung mit TAN-Verfahren …');
     sync = await mitTan(() => client.synchronize(), (ref, tan) => client.synchronizeWithTan(ref, tan));
   }
@@ -116,7 +126,7 @@ try {
   console.log(`\n${buchungen.length} Buchungen abgerufen.`);
 
   fs.mkdirSync('data', { recursive: true });
-  fs.writeFileSync(INFO_DATEI, JSON.stringify({ tanMethodId, bankingInformation: config.bankingInformation }, null, 2));
+  fs.writeFileSync(INFO_DATEI, JSON.stringify({ tanMethodId, tanMedium, bankingInformation: config.bankingInformation }, null, 2));
   console.log(`Bankparameter gespeichert in ${INFO_DATEI} (ohne PIN).`);
 } catch (e) {
   const ursache = e.cause ? ` (${e.cause.code ?? ''} ${e.cause.message ?? ''})` : '';
