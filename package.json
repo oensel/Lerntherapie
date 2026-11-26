@@ -15,18 +15,23 @@
     "test:e2e": "playwright test",
     "pg:start": "node scripts/lokale-pg.mjs start",
     "fints:test": "node scripts/fints-test.mjs",
-    "demo:daten": "node scripts/demo-daten.mjs"
+    "demo:daten": "node scripts/demo-daten.mjs",
+    "demo:finanzen": "node scripts/demo-finanzen.mjs"
   },
   "dependencies": {
+    "@google/genai": "^3.2.0",
     "dotenv": "^18.0.10",
     "express": "^5.3.0",
     "express-rate-limit": "^8.7.5",
+    "imapflow": "^2.12.2",
     "jsonwebtoken": "^9.0.3",
     "knex": "^3.3.0",
     "lib-fints": "^1.5.3",
+    "mailparser": "^3.15.0",
     "nodemailer": "^10.6.1",
     "pdf-lib": "^1.17.1",
-    "pg": "^8.23.1"
+    "pg": "^8.23.1",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "@playwright/test": "^1.65.1",

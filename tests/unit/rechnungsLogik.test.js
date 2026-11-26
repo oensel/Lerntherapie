@@ -55,3 +55,54 @@ test('Betrag 0 € erzeugt keine Position', () => {
   const p = positionen([t(1, 3, 'unentschuldigt'), t(2, 4, 'stattgefunden')], { stattgefunden: 5800, ausgefallen: 0, unentschuldigt: 0 });
   assert.deepEqual(p.map((x) => x.termin_id), [2]);
 });
+
+test('Zahlungsabgleich über Nachname und genauen Betrag', () => {
+  const offen = [
+    { id: 1, nummer: '2026-12-001', betrag_cent: 23200, klient_name: 'Max Müller', empfaenger: 'Eva Müller\nWeg 1' },
+    { id: 2, nummer: '2026-12-002', betrag_cent: 11600, klient_name: 'Lina Schmidt', empfaenger: 'Jugendamt Borken\nStr. 2' },
+    { id: 3, nummer: '2026-12-003', betrag_cent: 11600, klient_name: 'Tom Schmidt', empfaenger: 'Anna Schmidt' },
+  ];
+  assert.equal(passendeRechnung({ betrag_cent: 23200, verwendungszweck: 'Lerntherapie Max', gegen_name: 'MUELLER, EVA' }, offen).id, 1);
+  assert.equal(passendeRechnung({ betrag_cent: 23300, verwendungszweck: 'Mueller' }, offen), null); // Betrag weicht ab
+  assert.equal(passendeRechnung({ betrag_cent: 11600, verwendungszweck: 'Schmidt Dezember' }, offen), null); // nicht eindeutig
+  assert.equal(passendeRechnung({ betrag_cent: 11600, verwendungszweck: 'Rechnung', gegen_name: 'Kreis Borken' }, offen).id, 2);
+  assert.equal(passendeRechnung({ betrag_cent: 11600, verwendungszweck: 'Schmidtke' }, offen), null); // nur ganze Wörter
+});
+
+test('Terminart: anteiliger Preis nach realer Dauer', async () => {
+  const { artBetrag, positionen } = await import('../../src/services/rechnungsLogik.js');
+  const t = { id: 9, status: 'stattgefunden', beginn: '2026-11-03T14:00:00', ende: '2026-11-03T15:15:00', terminart_name: 'Therapiestunde', geplante_dauer_min: 60, preis_cent: 6000 };
+  assert.equal(artBetrag(t), 7500);
+  const satz = { stattgefunden: 5800, ausgefallen: 3000, unentschuldigt: 5800 };
+  const [p] = positionen([t], satz, 'Lerntherapie');
+  assert.equal(p.betrag_cent, 7500);
+  assert.equal(p.beschreibung, 'Therapiestunde 75 min');
+  // Ausfall mit Terminart: Ausfallbetrag der Therapie; ohne Art: Stundensatz
+  assert.equal(positionen([{ ...t, status: 'ausgefallen' }], satz)[0].betrag_cent, 3000);
+  assert.equal(positionen([{ ...t, preis_cent: null }], satz)[0].betrag_cent, 5800);
+});
+
+test('Verlauf einer Rechnung: Erstellung, Versand, Frist, Mahnung, nächster Schritt', async () => {
+  const { rechnungsVerlauf } = await import('../../src/services/rechnungsLogik.js');
+  const re = { status: 'offen', mahnstufe: 1, erstellt_am: '2026-10-03T06:00:00', rechnungsdatum: '2026-10-03', faellig_am: '2026-10-17' };
+  const mahnungen = [{ id: 5, stufe: 1, datum: '2026-10-25', frist: '2026-11-04', gebuehr_cent: 0, erstellt_am: '2026-10-25T09:00:00' }];
+  const versand = [{ gesendet_am: '2026-10-03T08:00:00', an: 'eltern@example.org' }, { gesendet_am: '2026-10-25T09:05:00', an: 'eltern@example.org', mahnung_id: 5, fehler: 'SMTP aus' }];
+  const v = rechnungsVerlauf(re, mahnungen, versand, { karenzTage: 7 }, new Date('2026-11-08T12:00:00'));
+  assert.deepEqual(v.map((e) => [e.datum, e.art, e.zustand]), [
+    ['2026-10-03', 'erstellt', 'erledigt'], ['2026-10-03', 'versand', 'erledigt'], ['2026-10-17', 'frist', 'faellig'],
+    ['2026-10-25', 'mahnung', 'erledigt'], ['2026-10-25', 'versand', 'fehler'], ['2026-11-04', 'frist', 'faellig'], ['2026-11-12', 'naechste', 'kommend'],
+  ]);
+  assert.equal(v.at(-1).titel, 'Mahnung möglich');
+  const bez = rechnungsVerlauf({ ...re, status: 'bezahlt', bezahlt_am: '2026-10-10', mahnstufe: 0 }, [], [], {}, new Date('2026-11-08'));
+  assert.deepEqual(bez.map((e) => [e.art, e.zustand]), [['erstellt', 'erledigt'], ['bezahlt', 'erledigt'], ['frist', 'erledigt']]);
+});
+
+test('Terminart: Betraege je Ergebnis, Abweichung von der ueblichen Dauer wird umgerechnet', async () => {
+  const { terminBetrag } = await import('../../src/services/rechnungsLogik.js');
+  const t = { beginn: '2026-11-03T14:00:00', ende: '2026-11-03T14:45:00', geplante_dauer_min: 60, preis_cent: 6000, ausfall_cent: 3000, unentschuldigt_cent: 4500 };
+  const satz = { stattgefunden: 9999, ausgefallen: 9999, unentschuldigt: 9999 };
+  assert.equal(terminBetrag({ ...t, status: 'stattgefunden' }, satz), 4500);
+  assert.equal(terminBetrag({ ...t, status: 'ausgefallen' }, satz), 3000);
+  assert.equal(terminBetrag({ ...t, status: 'unentschuldigt' }, satz), 4500);
+  assert.equal(terminBetrag({ ...t, status: 'stattgefunden', preis_cent: null }, satz), 9999);
+});

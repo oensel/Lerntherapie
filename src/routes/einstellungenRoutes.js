@@ -10,6 +10,7 @@ export function getEinstellungenRoutes(knex) {
 
   r.put('/', async (req, res) => {
     const daten = {};
+    if ('autoversand' in (req.body ?? {})) daten.autoversand = req.body.autoversand === true;
     for (const f of SAETZE) {
       if (!(f in (req.body ?? {}))) continue;
       const v = req.body[f];

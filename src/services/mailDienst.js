@@ -19,7 +19,7 @@ export function smtpAusEnv(env = process.env) {
 export function entwurfRechnung(r, praxisName) {
   return {
     betreff: `Rechnung ${r.nummer} – ${r.klient_name}, ${monatName(r.leistungsmonat)}`,
-    text: `Guten Tag,\n\nanbei erhalten Sie die Rechnung ${r.nummer} für die ${r.therapie_bezeichnung || 'Lerntherapie'} von ${r.klient_name} im ${monatName(r.leistungsmonat)} über ${eur(r.betrag_cent)}.\n\nBitte überweisen Sie den Betrag bis zum ${datum(r.faellig_am)} unter Angabe der Rechnungsnummer.\n\nMit freundlichen Grüßen\n${praxisName}`,
+    text: `Guten Tag,\n\nanbei erhalten Sie die Rechnung ${r.nummer} für die ${r.therapie_bezeichnung || 'Lerntherapie'} von ${r.klient_name} im ${monatName(r.leistungsmonat)} über ${eur(r.betrag_cent)}.\n\nBitte überweisen Sie den Betrag bis zum ${datum(r.faellig_am)} unter Angabe der Rechnungsnummer. Am schnellsten geht es mit dem Überweisungs-QR-Code in der PDF-Rechnung, den Sie mit Ihrer Banking-App scannen können.\n\nMit freundlichen Grüßen\n${praxisName}`,
   };
 }
 

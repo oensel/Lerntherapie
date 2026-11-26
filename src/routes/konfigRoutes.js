@@ -13,6 +13,14 @@ export function getKonfigRoutes(konfig) {
     res.json(await konfig.fuerAnzeige());
   });
 
+  r.get('/logo', async (_req, res) => {
+    const m = /^data:(image\/\w+);base64,(.*)$/.exec((await konfig.wirksam()).PRAXIS_LOGO ?? '');
+    if (!m) return res.status(404).end();
+    res.type(m[1]).send(Buffer.from(m[2], 'base64'));
+  });
+  r.put('/logo', async (req, res) => { await konfig.logoSetzen(req.body?.daten); res.json(await konfig.fuerAnzeige()); });
+  r.delete('/logo', async (_req, res) => { await konfig.logoSetzen(null); res.json(await konfig.fuerAnzeige()); });
+
   // Prüft Anmeldung am SMTP-Server mit den gespeicherten Werten (ohne eine Mail zu senden)
   r.post('/mail-test', async (_req, res) => {
     const smtp = smtpAusEnv(await konfig.wirksam());

@@ -1,11 +1,11 @@
 import { Router } from 'express';
-import { erstelleRechnungPdf, erstelleMahnungPdf, praxisAusEnv } from '../services/rechnungPdf.js';
-import { vormonat, MAHNSTUFEN } from '../services/rechnungsLogik.js';
-import { entwurfRechnung, entwurfMahnung } from '../services/mailDienst.js';
+import { erstelleMahnungPdf, praxisAusEnv } from '../services/rechnungPdf.js';
+import { vormonat, MAHNSTUFEN, mahnEinstellungen, rechnungsVerlauf } from '../services/rechnungsLogik.js';
+import { entwurfMahnung } from '../services/mailDienst.js';
 
 const MONAT = /^\d{4}-(0[1-9]|1[0-2])$/;
 
-export function getRechnungenRoutes(knex, dienst, mail, werte = async () => process.env) {
+export function getRechnungenRoutes(knex, dienst, mail, werte = async () => process.env, versand) {
   const praxisDaten = async () => praxisAusEnv(await werte());
   const r = Router();
 
@@ -33,6 +33,13 @@ export function getRechnungenRoutes(knex, dienst, mail, werte = async () => proc
     res.status(201).json({ erstellt });
   });
 
+  // Rechnungsausgang: geprüfte Rechnungen gesammelt mit dem Standardtext senden { ids: [...] }
+  r.post('/versand', async (req, res) => {
+    const ids = (req.body?.ids ?? []).map(Number).filter(Number.isInteger);
+    if (!ids.length) return res.status(400).json({ fehler: 'Keine Rechnungen ausgewählt' });
+    res.json(await versand.sammelVersand(ids));
+  });
+
   r.post('/abgleich', async (_req, res) => res.json({ bezahlt: await dienst.abgleichen() }));
 
   // Mahnwesen
@@ -46,13 +53,8 @@ export function getRechnungenRoutes(knex, dienst, mail, werte = async () => proc
     res.status(201).json(m);
   });
 
-  // PDF und Daten einer Rechnung bzw. Mahnung (für Anzeige und Versand)
-  async function rechnungsDokument(id) {
-    const re = await knex('rechnungen').where({ id }).first();
-    if (!re) return null;
-    const pos = await knex('rechnungspositionen').where({ rechnung_id: re.id }).orderBy(['datum', 'id']);
-    return { re, name: `Rechnung-${re.nummer}.pdf`, pdf: await erstelleRechnungPdf(re, pos, await praxisDaten()) };
-  }
+  // PDF und Daten einer Mahnung (für Anzeige und Versand); Rechnungen über den Versanddienst
+  const rechnungsDokument = versand.dokument;
   async function mahnungsDokument(mid) {
     const m = await knex('mahnungen').where({ id: mid }).first();
     if (!m) return null;
@@ -62,9 +64,7 @@ export function getRechnungenRoutes(knex, dienst, mail, werte = async () => proc
     return { m, re, art, offen: re.betrag_cent + gebuehren, name: `${art.replace(/ /g, '-')}-${re.nummer}.pdf`, pdf: await erstelleMahnungPdf(re, m, gebuehren, art, await praxisDaten()) };
   }
   const sendePdf = (res, d) => res.type('application/pdf').set('content-disposition', `inline; filename="${d.name}"`).send(Buffer.from(d.pdf));
-  // Adresse des Zahlers (aktuell, sonst die bei Erstellung gespeicherte), notfalls die des Klienten
-  const empfaengerMail = async (re) => (re.zahler_id && (await knex('zahler').where({ id: re.zahler_id }).first('email'))?.email)
-    || re.empfaenger_email || (await knex('klienten').where({ id: re.klient_id }).first('email'))?.email || '';
+  const empfaengerMail = versand.empfaengerMail;
   const pruefeVersand = (b) => (!b?.an || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(b.an) ? 'Gültige E-Mail-Adresse angeben'
     : !b.betreff?.trim() || !b.text?.trim() ? 'Betreff und Text dürfen nicht leer sein' : null);
 
@@ -97,6 +97,7 @@ export function getRechnungenRoutes(knex, dienst, mail, werte = async () => proc
     re.positionen = await knex('rechnungspositionen').where({ rechnung_id: re.id }).orderBy(['datum', 'id']);
     re.mahnungen = (await knex('mahnungen').where({ rechnung_id: re.id }).orderBy('stufe')).map((m) => ({ ...m, art: MAHNSTUFEN[m.stufe] }));
     re.versand = await knex('mail_versand').where({ rechnung_id: re.id }).orderBy('gesendet_am', 'desc');
+    re.verlauf = rechnungsVerlauf(re, re.mahnungen, re.versand, mahnEinstellungen(await werte()));
     res.json(re);
   });
 
@@ -107,20 +108,15 @@ export function getRechnungenRoutes(knex, dienst, mail, werte = async () => proc
   });
 
   r.get('/:id/versand', async (req, res) => {
-    const d = await rechnungsDokument(req.params.id);
-    if (!d) return res.status(404).json({ fehler: 'Rechnung nicht gefunden' });
-    res.json({ an: await empfaengerMail(d.re), ...entwurfRechnung(d.re, (await praxisDaten()).name), eingerichtet: await mail.eingerichtet() });
+    const e = await versand.entwurf(req.params.id);
+    if (!e) return res.status(404).json({ fehler: 'Rechnung nicht gefunden' });
+    res.json(e);
   });
 
   r.post('/:id/versand', async (req, res) => {
     const f = pruefeVersand(req.body);
     if (f) return res.status(400).json({ fehler: f });
-    const d = await rechnungsDokument(req.params.id);
-    if (!d) return res.status(404).json({ fehler: 'Rechnung nicht gefunden' });
-    if (d.re.status === 'storniert') return res.status(409).json({ fehler: 'Stornierte Rechnungen werden nicht versendet' });
-    await mail.sende({ ...req.body, anhang: { name: d.name, daten: d.pdf }, rechnung_id: d.re.id });
-    const [re] = await knex('rechnungen').where({ id: d.re.id }).update({ versendet_am: knex.fn.now() }).returning('*');
-    res.json(re);
+    res.json(await versand.senden(req.params.id, req.body));
   });
 
   // Manuell als bezahlt / wieder offen markieren: { status: 'bezahlt'|'offen', bezahlt_am? }

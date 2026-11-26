@@ -1,4 +1,4 @@
-import { mahnEinstellungen, naechsteMahnstufe, neueMahnung, BERECHNET, monatsGrenzen, positionen, saetze, naechsteNummer, empfaengerText, passendeRechnung, vormonat, tagStr } from './rechnungsLogik.js';
+import { LAUFTAG, mahnEinstellungen, naechsteMahnstufe, neueMahnung, BERECHNET, monatsGrenzen, positionen, saetze, naechsteNummer, empfaengerText, passendeRechnung, vormonat, tagStr } from './rechnungsLogik.js';
 import { starteTagesplan } from './zeitplan.js';
 
 const ZAHLUNGSZIEL_TAGE = 14;
@@ -64,7 +64,7 @@ export function erstelleRechnungsDienst(knex, { env = process.env, log = console
   // Storno gibt die Termine wieder frei, damit sie neu abgerechnet werden können
   async function stornieren(id) {
     return knex.transaction(async (trx) => {
-      const [r] = await trx('rechnungen').where({ id, status: 'offen' }).update({ status: 'storniert' }).returning('*');
+      const [r] = await trx('rechnungen').where({ id, status: 'offen' }).update({ status: 'storniert', storniert_am: trx.fn.now() }).returning('*');
       if (r) await trx('termine').where({ rechnung_id: id }).update({ rechnung_id: null });
       return r;
     });
@@ -113,11 +113,15 @@ export function erstelleRechnungsDienst(knex, { env = process.env, log = console
     });
   }
 
-  // Täglich 06:00; am 1. des Monats Rechnungen für den Vormonat. Abgleich nach jedem FinTS-Abruf.
-  function starteZeitplan() {
+  // Täglich 06:00; am 3. des Monats Rechnungen für den Vormonat (Rechnungsausgang), danach ggf. automatischer Versand.
+  // Abgleich nach jedem FinTS-Abruf.
+  function starteZeitplan({ nachLauf } = {}) {
     return starteTagesplan('Rechnungslauf', [env.RECHNUNG_LAUFZEIT || '06:00'], async () => {
-      if (new Date().getDate() !== 1) return;
-      try { await lauf(vormonat()); } catch (e) { log.error?.('Rechnungslauf fehlgeschlagen:', e); }
+      if (new Date().getDate() !== LAUFTAG) return;
+      try {
+        const erstellt = await lauf(vormonat());
+        if (nachLauf) await nachLauf(erstellt);
+      } catch (e) { log.error?.('Rechnungslauf fehlgeschlagen:', e); }
     }, log);
   }
 

@@ -1,4 +1,5 @@
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import { epcPayload, zeichneQr } from './girocode.js';
 
 const eur = (c) => (c / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });
 const datum = (d) => new Date(d).toLocaleDateString('de-DE');
@@ -12,11 +13,26 @@ export function praxisAusEnv(env = process.env) {
     iban: env.PRAXIS_IBAN || '', bic: env.PRAXIS_BIC || '', bank: env.PRAXIS_BANK || '',
     steuernr: env.PRAXIS_STEUERNR || '',
     hinweis: env.PRAXIS_HINWEIS || 'Umsatzsteuerfrei gem. § 4 Nr. 21 UStG.',
+    logo: env.PRAXIS_LOGO || '', // Data-URL (PNG/JPEG) aus den Einstellungen
   };
 }
 
 // Standardschriften können nur WinAnsi; Zeichen außerhalb ersetzen statt abzubrechen
 const sauber = (s) => String(s ?? '').replace(/[^\x20-\x7E\xA0-\xFF€–„“’]/g, '?');
+
+// Kopf links: Logo (höchstens 180 × 60 pt) oder, ohne Logo, der Praxisname
+async function kopf(doc, page, praxis, fb) {
+  const m = /^data:image\/(png|jpeg);base64,(.*)$/.exec(praxis.logo || '');
+  if (m) {
+    try {
+      const bild = m[1] === 'png' ? await doc.embedPng(m[2]) : await doc.embedJpg(m[2]);
+      const s = Math.min(180 / bild.width, 60 / bild.height, 1);
+      page.drawImage(bild, { x: 60, y: 795 - bild.height * s, width: bild.width * s, height: bild.height * s });
+      return;
+    } catch { /* defektes Bild: Name statt Logo */ }
+  }
+  page.drawText(sauber(praxis.name), { x: 60, y: 780, size: 16, font: fb });
+}
 
 export async function erstelleRechnungPdf(r, positionen, praxis = praxisAusEnv()) {
   const doc = await PDFDocument.create();
@@ -32,7 +48,7 @@ export async function erstelleRechnungPdf(r, positionen, praxis = praxisAusEnv()
   };
 
   // Kopf
-  text(praxis.name, L, 780, { font: fb, size: 16 });
+  await kopf(doc, page, praxis, fb);
   text([praxis.name, ...praxis.anschrift].join(' · '), L, 700, { size: 7, color: grau });
   r.empfaenger.split('\n').forEach((z, i) => text(z, L, 684 - i * 13));
   praxis.anschrift.forEach((z, i) => text(z, R, 780 - (i + 1) * 12, { size: 9, color: grau, rechts: true }));
@@ -65,6 +81,18 @@ export async function erstelleRechnungPdf(r, positionen, praxis = praxisAusEnv()
     `Bitte überweisen Sie den Betrag bis zum ${datum(r.faellig_am)} unter Angabe der Rechnungsnummer ${r.nummer}.`,
   ]) { text(z, L, y, { size: 9 }); y -= 14; }
 
+  // Überweisungs-QR-Code (GiroCode) mit Rechnungsnummer als Verwendungszweck
+  const qr = epcPayload({ name: praxis.name, iban: praxis.iban, bic: praxis.bic, betragCent: r.betrag_cent, zweck: r.nummer });
+  if (qr) {
+    if (y < 200) { page = doc.addPage([595.28, 841.89]); y = 780; }
+    const g = 110;
+    zeichneQr(page, qr, { x: R - g, y: y - g - 6, groesse: g });
+    text('Bequem bezahlen per QR-Code', L, y - 20, { font: fb, size: 9.5 });
+    ['Scannen Sie den Code mit der Banking-App Ihrer Bank', '(„Überweisung per QR-Code“ bzw. „GiroCode“). Empfänger, IBAN,',
+      'Betrag und Verwendungszweck werden automatisch übernommen.', 'Bitte ändern Sie den Verwendungszweck nicht.']
+      .forEach((z, i) => text(z, L, y - 36 - i * 12, { size: 9, color: grau }));
+  }
+
   // Fuß
   const fuss = [praxis.iban && `IBAN ${praxis.iban}`, praxis.bic && `BIC ${praxis.bic}`, praxis.bank, praxis.steuernr && `St.-Nr. ${praxis.steuernr}`].filter(Boolean).join(' · ');
   if (fuss) text(fuss, L, 50, { size: 8, color: grau });
@@ -84,7 +112,7 @@ export async function erstelleMahnungPdf(r, mahnung, gebuehrenBisher, titel, pra
     s = sauber(s);
     page.drawText(s, { x: rechts ? x - font.widthOfTextAtSize(s, size) : x, y, size, font, color });
   };
-  text(praxis.name, L, 780, { font: fb, size: 16 });
+  await kopf(doc, page, praxis, fb);
   text([praxis.name, ...praxis.anschrift].join(' · '), L, 700, { size: 7, color: grau });
   r.empfaenger.split('\n').forEach((z, i) => text(z, L, 684 - i * 13));
   praxis.anschrift.forEach((z, i) => text(z, R, 780 - (i + 1) * 12, { size: 9, color: grau, rechts: true }));
@@ -115,6 +143,12 @@ export async function erstelleMahnungPdf(r, mahnung, gebuehrenBisher, titel, pra
     'Sollten Sie die Zahlung inzwischen geleistet haben, betrachten Sie dieses Schreiben bitte als gegenstandslos.',
     '', 'Mit freundlichen Grüßen', praxis.name,
   ]) { text(z, L, y, { size: 9.5 }); y -= 14; }
+
+  const qr = epcPayload({ name: praxis.name, iban: praxis.iban, bic: praxis.bic, betragCent: r.betrag_cent + gebuehrenBisher, zweck: r.nummer });
+  if (qr) {
+    zeichneQr(page, qr, { x: R - 100, y: 75, groesse: 100 });
+    text('Überweisung per QR-Code', R - 100, 66, { size: 7, color: grau });
+  }
 
   const fuss = [praxis.iban && `IBAN ${praxis.iban}`, praxis.bic && `BIC ${praxis.bic}`, praxis.bank, praxis.steuernr && `St.-Nr. ${praxis.steuernr}`].filter(Boolean).join(' · ');
   if (fuss) text(fuss, L, 50, { size: 8, color: grau });

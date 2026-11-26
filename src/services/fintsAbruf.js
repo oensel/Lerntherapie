@@ -4,10 +4,29 @@ import { bildeUmsaetze } from './umsatzAbbildung.js';
 import { setzeTanMedium } from './fintsTanMedium.js';
 
 const PRODUKT_VERSION = '0.1';
-const ERSTER_ABRUF_TAGE = 90;
+const STANDARD_SPEICHER_TAGE = 365; // falls die Bank keinen Speicherzeitraum nennt
 const UEBERLAPPUNG_TAGE = 10;
 const FREIGABE_WARTEZEIT_MS = 5 * 60_000; // so lange wird auf die Freigabe in der S-pushTAN-App gewartet
 const FREIGABE_INTERVALL_MS = 5_000;
+
+// Wie viele Tage die Bank Umsätze vorhält (maxDays aus HIKAZS/HICAZS der Bankparameter)
+export function speicherTage(bankingInformation) {
+  const tage = [];
+  const suche = (o) => {
+    if (!o || typeof o !== 'object') return;
+    if ((o.transId === 'HKKAZ' || o.transId === 'HKCAZ') && o.params?.maxDays > 0) tage.push(o.params.maxDays);
+    Object.values(o).forEach(suche);
+  };
+  suche(bankingInformation);
+  return tage.length ? Math.max(...tage) : STANDARD_SPEICHER_TAGE;
+}
+
+// Jüngster Schlusssaldo aus den Kontoauszügen in Cent, mit Datum
+export function letzterSaldo(statements) {
+  const b = (statements ?? []).map((s) => s.closingBalance).filter((x) => x && Number.isFinite(x.value))
+    .sort((a, b) => new Date(b.date) - new Date(a.date))[0];
+  return b ? { saldo_cent: Math.round(b.value * 100), saldo_datum: new Date(b.date) } : {};
+}
 
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -55,7 +74,7 @@ async function mitFreigabe(start, fortsetzen, beiFreigabe) {
  * Ruft die Umsätze seit dem letzten erfolgreichen Abruf (mit Überlappung) ab und speichert neue Buchungen.
  * @returns {{ neu: number, abgerufen: number }}
  */
-export async function holeUmsaetze(knex, { env = process.env, ausloeser = 'manuell', log = console } = {}) {
+export async function holeUmsaetze(knex, { env = process.env, ausloeser = 'manuell', log = console, voll = false } = {}) {
   const protokoll = async (ergebnis, neu, meldung) =>
     knex('fints_abrufe').insert({ ausloeser, ergebnis, neue_umsaetze: neu, meldung });
   await knex('fints_zustand').where({ id: 1 }).update({ letzter_abruf: knex.fn.now() });
@@ -76,9 +95,10 @@ export async function holeUmsaetze(knex, { env = process.env, ausloeser = 'manue
     if (!konto) throw new Error('Keine Konten in den Bankparametern');
     const kontoKennung = konto.iban ?? konto.accountNumber;
 
-    const von = z.letzter_erfolg
+    // Erster Abruf bzw. „alles holen“: so weit zurück, wie die Bank Umsätze vorhält; sonst seit dem letzten Erfolg
+    const von = z.letzter_erfolg && !voll
       ? new Date(new Date(z.letzter_erfolg).getTime() - UEBERLAPPUNG_TAGE * 86400000)
-      : new Date(Date.now() - ERSTER_ABRUF_TAGE * 86400000);
+      : new Date(Date.now() - (speicherTage(config.bankingInformation) - 1) * 86400000);
 
     const antwort = await mitFreigabe(
       () => client.getAccountStatements(konto, von),
@@ -101,6 +121,7 @@ export async function holeUmsaetze(knex, { env = process.env, ausloeser = 'manue
       letzter_erfolg: knex.fn.now(),
       letzter_fehler: null,
       freigabe_noetig: false,
+      ...letzterSaldo(antwort.statements),
     });
     await protokoll('ok', neu, `${zeilen.length} Buchungen seit ${von.toLocaleDateString('de-DE')}`);
     log.info?.(`FinTS: ${neu} neue von ${zeilen.length} Buchungen`);
