@@ -21,14 +21,37 @@ const { FINTS_PRODUKT_ID: produktId, FINTS_URL: url, FINTS_BLZ: blz, FINTS_BENUT
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
+// Liest eine Eingabe Zeichen für Zeichen im Raw-Modus, ohne sie anzuzeigen (zeigt * je Zeichen).
+// Ohne echtes Terminal (z.B. umgeleitete Eingabe) wird abgebrochen, statt die PIN sichtbar zu lesen.
 async function frageVerdeckt(text) {
-  // Eingabe nicht auf dem Bildschirm anzeigen
-  const ausgabe = rl._writeToOutput;
-  rl._writeToOutput = (s) => { if (s.includes(text)) ausgabe.call(rl, s); };
-  const antwort = await rl.question(text);
-  rl._writeToOutput = ausgabe;
-  process.stdout.write('\n');
-  return antwort;
+  if (!process.stdin.isTTY) throw new Error('PIN-Eingabe braucht ein interaktives Terminal');
+  rl.pause();
+  process.stdout.write(text);
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  return new Promise((resolve, reject) => {
+    let wert = '';
+    const beenden = (fehler) => {
+      process.stdin.setRawMode(false);
+      process.stdin.removeListener('data', beiDaten);
+      process.stdout.write('\n');
+      rl.resume();
+      fehler ? reject(fehler) : resolve(wert);
+    };
+    const beiDaten = (puffer) => {
+      for (const z of puffer.toString('utf8')) {
+        if (z === '\r' || z === '\n') return beenden();
+        if (z === '\u0003') return beenden(new Error('Abgebrochen'));
+        if (z === '\u0008' || z === '\u007f') {
+          if (wert) { wert = wert.slice(0, -1); process.stdout.write('\b \b'); }
+        } else if (z >= ' ') {
+          wert += z;
+          process.stdout.write('*');
+        }
+      }
+    };
+    process.stdin.on('data', beiDaten);
+  });
 }
 
 function zeigeBankantworten(antwort) {
@@ -96,7 +119,9 @@ try {
   fs.writeFileSync(INFO_DATEI, JSON.stringify({ tanMethodId, bankingInformation: config.bankingInformation }, null, 2));
   console.log(`Bankparameter gespeichert in ${INFO_DATEI} (ohne PIN).`);
 } catch (e) {
-  console.error(`\nFehler: ${e.message}`);
+  const ursache = e.cause ? ` (${e.cause.code ?? ''} ${e.cause.message ?? ''})` : '';
+  console.error(`\nFehler: ${e.message}${ursache}`);
+  if (e.cause?.code === 'ENOTFOUND') console.error(`Die Adresse in FINTS_URL ist nicht erreichbar: ${url}`);
   process.exitCode = 1;
 } finally {
   rl.close();
