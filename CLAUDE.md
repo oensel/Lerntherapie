@@ -11,7 +11,8 @@ Praxisverwaltung für eine Lerntherapie-Praxis: Klienten, Termine und Kalender (
 - Kontoumsätze: `lib-fints`, Abruf täglich 08:00/16:00 (`src/services/fintsAbruf.js`, `zeitplan.js`, `umsatzDienst.js`); neue Umsätze = `umsaetze.gesehen=false` → Zähler in der Navigation. Ersteinrichtung mit `npm run fints:test` (schreibt `data/fints-bankinfo.json`, der erste Abruf übernimmt sie in `fints_zustand`)
 - Rechnungen: `src/services/rechnungsDienst.js` (Vorschau, Lauf am 1. 06:00 für den Vormonat, Storno, Zahlungsabgleich nach jedem FinTS-Abruf über Rechnungsnummer im Verwendungszweck), Logik in `rechnungsLogik.js`, PDF mit `pdf-lib` (`rechnungPdf.js`, Praxisdaten aus `PRAXIS_*` in der `.env`). Positionen sind eingefroren, abgerechnete Termine tragen `rechnung_id`; Nummern `JJJJ-MM-NNN`
 - Mahnwesen: Stufen Zahlungserinnerung → Mahnung → letzte Mahnung (`mahnungen`, `rechnungen.mahnstufe`); fällig, wenn Fälligkeit bzw. letzte Mahnfrist + `MAHN_KARENZ_TAGE` verstrichen ist; wird manuell ausgelöst, PDF je Mahnung
-- Geplant: `imapflow` + `nodemailer` (Mail, Rechnungs- und Mahnversand), JWT-Login
+- E-Mail-Versand: `src/services/mailDienst.js` (`nodemailer`, SMTP aus `SMTP_*`/`MAIL_*` in der `.env`); Rechnung bzw. Mahnung als PDF-Anhang, Entwurf in der Oberfläche bearbeitbar, jeder Versuch in `mail_versand` protokolliert
+- Geplant: `imapflow` (Posteingang), JWT-Login
 
 ## Commands
 - `npm run pg:start` — lokales PostgreSQL (Daten in `data/pg-lokal`, Port aus `DB_PORT` in `.env`)

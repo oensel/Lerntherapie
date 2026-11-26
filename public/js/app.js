@@ -191,12 +191,13 @@ ${R.mahn.length ? `<div class="card" style="margin-bottom:14px"><h2>Fällige Mah
 <div class="grid"><div class="card"><div class="row"><h2 style="margin:0">Abrechnung</h2><span class="sp"></span><select data-remonat style="width:auto">${monate.map((x) => `<option value="${x}" ${x === m ? 'selected' : ''}>${monatText(x)}</option>`).join('')}</select></div>
 <table class="stack"><thead><tr><th>Klient</th><th class="n">Einheiten</th><th class="n">Betrag</th></tr></thead><tbody>${!vs ? '<tr><td colspan="3" class="sub">Lädt …</td></tr>' : vs.map((v) => `<tr><td>${esc(v.name)}${v.bereits_berechnet ? ' <span class="st" style="--c:var(--ok)">berechnet</span>' : ''}${v.ohne_status ? ` <span class="st" style="--c:var(--aus)">${v.ohne_status} ohne Status</span>` : ''}${v.noch_geplant ? ` <span class="sub">${v.noch_geplant} noch geplant</span>` : ''}</td><td class="n">${v.positionen.length}</td><td class="n">${eur(v.betrag_cent / 100)}</td></tr>`).join('') || '<tr><td colspan="3" class="sub">Nichts abzurechnen.</td></tr>'}</tbody></table>
 <p class="hint">Berechnet werden stattgefundene, ausgefallene und unentschuldigte Termine. Vergangene Termine ohne Status bitte vorher prüfen – sie werden nicht berechnet.</p><div class="row"><span class="sp"></span><button class="pri" data-lauf ${neu.length ? '' : 'disabled'}>${neu.length} Rechnung${neu.length === 1 ? '' : 'en'} erstellen</button></div>
-<h2 style="margin-top:20px">Erstellte Rechnungen</h2><table class="stack"><thead><tr><th>Nr.</th><th>Klient</th><th>Monat</th><th class="n">Betrag</th><th>Status</th></tr></thead><tbody>${RE.map((r) => `<tr data-re="${r.id}" style="cursor:pointer${p?.id === r.id ? ';background:var(--sel, #eef3f6)' : ''}"><td>${esc(r.nummer)}</td><td>${esc(r.klient_name)}</td><td>${monatText(r.leistungsmonat)}</td><td class="n">${eur(r.betrag_cent / 100)}</td><td>${reSt(r)}</td></tr>`).join('') || '<tr><td colspan="5" class="sub">Noch keine Rechnungen erstellt.</td></tr>'}</tbody></table></div>
+<h2 style="margin-top:20px">Erstellte Rechnungen</h2><table class="stack"><thead><tr><th>Nr.</th><th>Klient</th><th>Monat</th><th class="n">Betrag</th><th>Status</th></tr></thead><tbody>${RE.map((r) => `<tr data-re="${r.id}" style="cursor:pointer${p?.id === r.id ? ';background:var(--sel, #eef3f6)' : ''}"><td>${esc(r.nummer)}${r.versendet_am ? ' <span title="per E-Mail versendet">✉</span>' : ''}</td><td>${esc(r.klient_name)}</td><td>${monatText(r.leistungsmonat)}</td><td class="n">${eur(r.betrag_cent / 100)}</td><td>${reSt(r)}</td></tr>`).join('') || '<tr><td colspan="5" class="sub">Noch keine Rechnungen erstellt.</td></tr>'}</tbody></table></div>
 <div>${p ? `<div class="paper"><div class="row"><div><h3>Rechnung ${esc(p.nummer)}</h3>${datum(p.rechnungsdatum)} · fällig ${datum(p.faellig_am)}</div><span class="sp"></span>${reSt(p)}</div><p style="white-space:pre-line">${esc(p.empfaenger)}</p><p>betr. ${esc(p.klient_name)} · Leistungszeitraum: ${monatText(p.leistungsmonat)}</p>
 <table><thead><tr><th>Datum</th><th>Leistung</th><th class="n">Betrag</th></tr></thead><tbody>${p.positionen.map((x) => `<tr><td>${datum(x.datum)}</td><td>${esc(x.beschreibung)}</td><td class="n">${eur(x.betrag_cent / 100)}</td></tr>`).join('')}<tr><td></td><td><b>Gesamt</b></td><td class="n"><b>${eur(p.betrag_cent / 100)}</b></td></tr></tbody></table>
-${p.mahnungen?.length ? `<p><b>Mahnungen</b><br>${p.mahnungen.map((x) => `<a href="/api/rechnungen/mahnungen/${x.id}/pdf" target="_blank">${esc(x.art)}</a> vom ${datum(x.datum)}, Frist ${datum(x.frist)}${x.gebuehr_cent ? `, Gebühr ${eur(x.gebuehr_cent / 100)}` : ''}`).join('<br>')}</p>` : ''}
+${p.mahnungen?.length ? `<p><b>Mahnungen</b><br>${p.mahnungen.map((x) => `<a href="/api/rechnungen/mahnungen/${x.id}/pdf" target="_blank">${esc(x.art)}</a> vom ${datum(x.datum)}, Frist ${datum(x.frist)}${x.gebuehr_cent ? `, Gebühr ${eur(x.gebuehr_cent / 100)}` : ''} · ${x.versendet_am ? `per E-Mail am ${datum(x.versendet_am)}` : `<a href="#" data-mail="/rechnungen/mahnungen/${x.id}">per E-Mail senden</a>`}`).join('<br>')}</p>` : ''}
+${p.versand?.length ? `<p class="sub">${p.versand.map((v) => `${v.fehler ? '⚠ ' : '✉ '}${new Date(v.gesendet_am).toLocaleString('de-DE')} an ${esc(v.an)}: ${esc(v.betreff)}${v.fehler ? ` – <b>fehlgeschlagen</b> (${esc(v.fehler)})` : ''}`).join('<br>')}</p>` : ''}
 ${p.bezahlt_am ? `<p class="sub">Bezahlt am ${datum(p.bezahlt_am)}${p.umsatz_id ? ' (Kontoumsatz zugeordnet)' : ''}</p>` : ''}</div>
-<div class="row" style="margin-top:8px"><a href="/api/rechnungen/${p.id}/pdf" target="_blank" class="btn">PDF öffnen</a>${p.status === 'offen' ? `<button data-rest="bezahlt">Als bezahlt markieren</button>${p.mahnstufe < 3 && tagStr(new Date(p.faellig_am)) < heute() ? `<button data-mahnen="${p.id}" data-sofort>${['Zahlungserinnerung', 'Mahnung', 'Letzte Mahnung'][p.mahnstufe]} erstellen</button>` : ''}<button data-rest="storniert">Stornieren</button>` : p.status === 'bezahlt' ? '<button data-rest="offen">Wieder offen</button>' : ''}</div>` : '<p class="sub">Rechnung in der Liste auswählen.</p>'}</div></div>`;
+<div class="row" style="margin-top:8px"><a href="/api/rechnungen/${p.id}/pdf" target="_blank" class="btn">PDF öffnen</a>${p.status !== 'storniert' ? `<button data-mail="/rechnungen/${p.id}">${p.versendet_am ? 'Erneut per E-Mail' : 'Per E-Mail senden'}</button>` : ''}${p.status === 'offen' ? `<button data-rest="bezahlt">Als bezahlt markieren</button>${p.mahnstufe < 3 && tagStr(new Date(p.faellig_am)) < heute() ? `<button data-mahnen="${p.id}" data-sofort>${['Zahlungserinnerung', 'Mahnung', 'Letzte Mahnung'][p.mahnstufe]} erstellen</button>` : ''}<button data-rest="storniert">Stornieren</button>` : p.status === 'bezahlt' ? '<button data-rest="offen">Wieder offen</button>' : ''}</div>` : '<p class="sub">Rechnung in der Liste auswählen.</p>'}</div></div>`;
   },
 
   umsaetze() {
@@ -279,10 +280,21 @@ function materialDialog(id) {
   pop.classList.add('on');
 }
 
+async function mailDialog(pfad) {
+  const e = await api(pfad + '/versand');
+  dlg.innerHTML = `<h2>Per E-Mail senden</h2>${e.eingerichtet ? '' : '<p class="hint"><b>Noch nicht eingerichtet:</b> SMTP-Zugang (SMTP_HOST usw.) in der .env eintragen.</p>'}<form id="mform" data-pfad="${esc(pfad)}">
+<label for="m-an">An</label><input id="m-an" type="email" required value="${esc(e.an)}" placeholder="E-Mail der Erziehungsberechtigten">
+<label for="m-b">Betreff</label><input id="m-b" required value="${esc(e.betreff)}">
+<label for="m-t">Text</label><textarea id="m-t" rows="10" required>${esc(e.text)}</textarea>
+<p class="sub">Das PDF wird als Anhang mitgeschickt.</p>
+<div class="row" style="margin-top:14px"><span class="sp"></span><button type="button" data-close>Abbrechen</button><button class="pri" ${e.eingerichtet ? '' : 'disabled'}>Senden</button></div></form>`;
+  pop.classList.add('on');
+}
+
 // ---------- Ereignisse ----------
 document.addEventListener('click', (e) => {
   if (e.target === pop) return schliessen();
-  const b = e.target.closest('[data-term],[data-set],[data-close],[data-send],[data-material],[data-go],[data-kl],[data-tab],[data-edit],[data-archive],[data-doku],[data-arch],[data-neutermin],[data-woche],[data-loesch],[data-abruf],[data-re],[data-rest],[data-lauf],[data-abgleich],[data-mahnen]');
+  const b = e.target.closest('[data-term],[data-set],[data-close],[data-send],[data-material],[data-go],[data-kl],[data-tab],[data-edit],[data-archive],[data-doku],[data-arch],[data-neutermin],[data-woche],[data-loesch],[data-abruf],[data-re],[data-rest],[data-lauf],[data-abgleich],[data-mahnen],[data-mail]');
   if (!b) return;
   const d = b.dataset;
   if (d.term) return statusDialog(d.term);
@@ -306,6 +318,7 @@ document.addEventListener('click', (e) => {
     const id = R.auswahl.id;
     return aktion(async () => { await api(`/rechnungen/${id}/status`, { methode: 'PUT', daten: { status: d.rest } }); R.auswahl = await api(`/rechnungen/${id}`); await ladeVorschau(); });
   }
+  if (d.mail) { e.preventDefault(); return mailDialog(d.mail).catch((x) => { S.fehler = x.message; render(); }); }
   if (d.mahnen) return aktion(async () => {
     const m = await api(`/rechnungen/${d.mahnen}/mahnung`, { methode: 'POST', daten: { erzwingen: 'sofort' in d } });
     R.auswahl = await api(`/rechnungen/${d.mahnen}`); await ladeVorschau();
@@ -341,6 +354,14 @@ document.addEventListener('submit', (e) => {
     };
     schliessen();
     return aktion(() => (f.dataset.id ? api(`/klienten/${f.dataset.id}`, { methode: 'PUT', daten }) : api('/klienten', { methode: 'POST', daten })));
+  }
+  if (f.id === 'mform') {
+    const daten = { an: f.querySelector('#m-an').value.trim(), betreff: f.querySelector('#m-b').value, text: f.querySelector('#m-t').value };
+    const knopf = f.querySelector('.pri'); knopf.disabled = true; knopf.textContent = 'Wird gesendet …';
+    return api(f.dataset.pfad + '/versand', { methode: 'POST', daten }).then(async () => {
+      schliessen();
+      await aktion(async () => { if (R.auswahl) R.auswahl = await api(`/rechnungen/${R.auswahl.id}`); });
+    }).catch((x) => { knopf.disabled = false; knopf.textContent = 'Senden'; alert(x.message); });
   }
   if (f.id === 'tform') {
     const k = +f.querySelector('#t-k').value, beginn = new Date(f.querySelector('#t-d').value);

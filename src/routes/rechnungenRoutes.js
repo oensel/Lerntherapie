@@ -1,10 +1,11 @@
 import { Router } from 'express';
-import { erstelleRechnungPdf, erstelleMahnungPdf } from '../services/rechnungPdf.js';
+import { erstelleRechnungPdf, erstelleMahnungPdf, praxisAusEnv } from '../services/rechnungPdf.js';
 import { vormonat, MAHNSTUFEN } from '../services/rechnungsLogik.js';
+import { entwurfRechnung, entwurfMahnung } from '../services/mailDienst.js';
 
 const MONAT = /^\d{4}-(0[1-9]|1[0-2])$/;
 
-export function getRechnungenRoutes(knex, dienst) {
+export function getRechnungenRoutes(knex, dienst, mail, praxis = praxisAusEnv()) {
   const r = Router();
 
   // ?klient=ID&status=offen|bezahlt|storniert
@@ -44,13 +45,47 @@ export function getRechnungenRoutes(knex, dienst) {
     res.status(201).json(m);
   });
 
-  r.get('/mahnungen/:mid/pdf', async (req, res) => {
-    const m = await knex('mahnungen').where({ id: req.params.mid }).first();
-    if (!m) return res.status(404).json({ fehler: 'Mahnung nicht gefunden' });
+  // PDF und Daten einer Rechnung bzw. Mahnung (für Anzeige und Versand)
+  async function rechnungsDokument(id) {
+    const re = await knex('rechnungen').where({ id }).first();
+    if (!re) return null;
+    const pos = await knex('rechnungspositionen').where({ rechnung_id: re.id }).orderBy(['datum', 'id']);
+    return { re, name: `Rechnung-${re.nummer}.pdf`, pdf: await erstelleRechnungPdf(re, pos, praxis) };
+  }
+  async function mahnungsDokument(mid) {
+    const m = await knex('mahnungen').where({ id: mid }).first();
+    if (!m) return null;
     const re = await knex('rechnungen').where({ id: m.rechnung_id }).first();
     const [{ s }] = await knex('mahnungen').where({ rechnung_id: re.id }).where('stufe', '<=', m.stufe).sum({ s: 'gebuehr_cent' });
-    const pdf = await erstelleMahnungPdf(re, m, Number(s || 0), MAHNSTUFEN[m.stufe]);
-    res.type('application/pdf').set('content-disposition', `inline; filename="${MAHNSTUFEN[m.stufe].replace(/ /g, '-')}-${re.nummer}.pdf"`).send(Buffer.from(pdf));
+    const art = MAHNSTUFEN[m.stufe], gebuehren = Number(s || 0);
+    return { m, re, art, offen: re.betrag_cent + gebuehren, name: `${art.replace(/ /g, '-')}-${re.nummer}.pdf`, pdf: await erstelleMahnungPdf(re, m, gebuehren, art, praxis) };
+  }
+  const sendePdf = (res, d) => res.type('application/pdf').set('content-disposition', `inline; filename="${d.name}"`).send(Buffer.from(d.pdf));
+  const empfaengerMail = async (klientId) => (await knex('klienten').where({ id: klientId }).first('email'))?.email ?? '';
+  const pruefeVersand = (b) => (!b?.an || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(b.an) ? 'Gültige E-Mail-Adresse angeben'
+    : !b.betreff?.trim() || !b.text?.trim() ? 'Betreff und Text dürfen nicht leer sein' : null);
+
+  r.get('/mahnungen/:mid/pdf', async (req, res) => {
+    const d = await mahnungsDokument(req.params.mid);
+    if (!d) return res.status(404).json({ fehler: 'Mahnung nicht gefunden' });
+    sendePdf(res, d);
+  });
+
+  // E-Mail-Versand: GET liefert den Entwurf, POST { an, betreff, text } sendet mit PDF im Anhang
+  r.get('/mahnungen/:mid/versand', async (req, res) => {
+    const d = await mahnungsDokument(req.params.mid);
+    if (!d) return res.status(404).json({ fehler: 'Mahnung nicht gefunden' });
+    res.json({ an: await empfaengerMail(d.re.klient_id), ...entwurfMahnung(d.re, d.m, d.art, d.offen, praxis.name), eingerichtet: mail.eingerichtet() });
+  });
+
+  r.post('/mahnungen/:mid/versand', async (req, res) => {
+    const f = pruefeVersand(req.body);
+    if (f) return res.status(400).json({ fehler: f });
+    const d = await mahnungsDokument(req.params.mid);
+    if (!d) return res.status(404).json({ fehler: 'Mahnung nicht gefunden' });
+    await mail.sende({ ...req.body, anhang: { name: d.name, daten: d.pdf }, rechnung_id: d.re.id, mahnung_id: d.m.id });
+    const [m] = await knex('mahnungen').where({ id: d.m.id }).update({ versendet_am: knex.fn.now() }).returning('*');
+    res.json(m);
   });
 
   r.get('/:id', async (req, res) => {
@@ -58,15 +93,31 @@ export function getRechnungenRoutes(knex, dienst) {
     if (!re) return res.status(404).json({ fehler: 'Rechnung nicht gefunden' });
     re.positionen = await knex('rechnungspositionen').where({ rechnung_id: re.id }).orderBy(['datum', 'id']);
     re.mahnungen = (await knex('mahnungen').where({ rechnung_id: re.id }).orderBy('stufe')).map((m) => ({ ...m, art: MAHNSTUFEN[m.stufe] }));
+    re.versand = await knex('mail_versand').where({ rechnung_id: re.id }).orderBy('gesendet_am', 'desc');
     res.json(re);
   });
 
   r.get('/:id/pdf', async (req, res) => {
-    const re = await knex('rechnungen').where({ id: req.params.id }).first();
-    if (!re) return res.status(404).json({ fehler: 'Rechnung nicht gefunden' });
-    const pos = await knex('rechnungspositionen').where({ rechnung_id: re.id }).orderBy(['datum', 'id']);
-    const pdf = await erstelleRechnungPdf(re, pos);
-    res.type('application/pdf').set('content-disposition', `inline; filename="Rechnung-${re.nummer}.pdf"`).send(Buffer.from(pdf));
+    const d = await rechnungsDokument(req.params.id);
+    if (!d) return res.status(404).json({ fehler: 'Rechnung nicht gefunden' });
+    sendePdf(res, d);
+  });
+
+  r.get('/:id/versand', async (req, res) => {
+    const d = await rechnungsDokument(req.params.id);
+    if (!d) return res.status(404).json({ fehler: 'Rechnung nicht gefunden' });
+    res.json({ an: await empfaengerMail(d.re.klient_id), ...entwurfRechnung(d.re, praxis.name), eingerichtet: mail.eingerichtet() });
+  });
+
+  r.post('/:id/versand', async (req, res) => {
+    const f = pruefeVersand(req.body);
+    if (f) return res.status(400).json({ fehler: f });
+    const d = await rechnungsDokument(req.params.id);
+    if (!d) return res.status(404).json({ fehler: 'Rechnung nicht gefunden' });
+    if (d.re.status === 'storniert') return res.status(409).json({ fehler: 'Stornierte Rechnungen werden nicht versendet' });
+    await mail.sende({ ...req.body, anhang: { name: d.name, daten: d.pdf }, rechnung_id: d.re.id });
+    const [re] = await knex('rechnungen').where({ id: d.re.id }).update({ versendet_am: knex.fn.now() }).returning('*');
+    res.json(re);
   });
 
   // Manuell als bezahlt / wieder offen markieren: { status: 'bezahlt'|'offen', bezahlt_am? }

@@ -24,6 +24,7 @@
     "jsonwebtoken": "^9.0.3",
     "knex": "^3.3.0",
     "lib-fints": "^1.5.3",
+    "nodemailer": "^10.6.1",
     "pdf-lib": "^1.17.1",
     "pg": "^8.23.1"
   },
