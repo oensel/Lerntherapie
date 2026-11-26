@@ -13,6 +13,9 @@ services:
       DB_HOST: db
       DB_PORT: 5432
       DB_AUTO_MIGRATE: "true"
+      TZ: Europe/Berlin
+    volumes:
+      - ./data:/app/data
     ports:
       - "${PORT:-3000}:3000"
     restart: unless-stopped

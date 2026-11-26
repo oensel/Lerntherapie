@@ -90,7 +90,18 @@ const eur=n=>n.toLocaleString('de-DE',{style:'currency',currency:'EUR'});
 const st=s=>`<span class="st" style="--c:var(${ST[s][1]})">${ST[s][0]}</span>`;
 const tage=d=>Math.ceil((new Date(d.slice(0,10))-new Date('2026-11-26'))/864e5);
 const offen=()=>KL.filter(k=>k.material&&!k.material.versandt&&tage(k.erster)<=7);
+// Kontoumsätze aus der API (FinTS-Abruf 08:00/16:00)
+const U={neu:0,liste:[],status:{},neuIds:new Set(),nur:''};
+const datum=d=>new Date(d).toLocaleDateString('de-DE');
+async function ladeUmsatzStatus(){try{U.status=await (await fetch('/api/umsaetze/status')).json();U.neu=U.status.neu;}catch{}}
+async function ladeUmsaetze(){const q=U.nur?`?nur=${U.nur}`:'';U.liste=await (await fetch('/api/umsaetze'+q)).json();U.liste.filter(u=>!u.gesehen).forEach(u=>U.neuIds.add(u.id));if(U.neu){await fetch('/api/umsaetze/gesehen',{method:'POST'});U.neu=0}}
 const V={
+umsaetze(){const s=U.status,ein=U.liste.filter(u=>u.betrag_cent>0).reduce((a,u)=>a+u.betrag_cent,0),aus=U.liste.filter(u=>u.betrag_cent<0).reduce((a,u)=>a+u.betrag_cent,0);
+return`<div class="row"><div><h1>Umsätze</h1><p class="sub">Automatischer Abruf täglich 08:00 und 16:00 Uhr · letzter erfolgreicher Abruf: ${s.letzter_erfolg?new Date(s.letzter_erfolg).toLocaleString('de-DE'):'noch keiner'}</p></div><span class="sp"></span><select data-filter style="width:auto">${[['','Alle'],['eingang','Eingänge'],['ausgang','Ausgänge']].map(([v,l])=>`<option value="${v}" ${U.nur==v?'selected':''}>${l}</option>`).join('')}</select><button class="pri" data-abruf ${s.laeuft?'disabled':''}>${s.laeuft?'Abruf läuft …':'Jetzt abrufen'}</button></div>
+${s.freigabe_noetig?'<p class="hint"><b>Freigabe nötig:</b> Bitte den Abruf in der S-pushTAN-App bestätigen (die Bank verlangt das etwa alle 90 Tage).</p>':s.letzter_fehler?`<p class="hint"><b>Letzter Abruf fehlgeschlagen:</b> ${esc(s.letzter_fehler)}</p>`:''}
+<div class="row"><div class="card" style="flex:1"><div class="sub" style="margin:0">Eingänge</div><b style="font-size:20px">${eur(ein/100)}</b></div><div class="card" style="flex:1"><div class="sub" style="margin:0">Ausgänge</div><b style="font-size:20px">${eur(aus/100)}</b></div></div>
+<table class="stack"><thead><tr><th>Datum</th><th>Auftraggeber / Empfänger</th><th>Verwendungszweck</th><th class="n">Betrag</th></tr></thead><tbody>
+${U.liste.length?U.liste.map(u=>`<tr><td>${datum(u.buchungsdatum)}${U.neuIds.has(u.id)?' <span class="badge">neu</span>':''}</td><td><b>${esc(u.gegen_name||u.buchungstext||'—')}</b>${u.gegen_iban?`<br><span class="sub">${esc(u.gegen_iban)}</span>`:''}</td><td>${esc(u.verwendungszweck||'')}</td><td class="n" style="color:${u.betrag_cent<0?'var(--unent)':'var(--ok)'};font-weight:600">${eur(u.betrag_cent/100)}</td></tr>`).join(''):'<tr><td colspan="4" class="sub">Noch keine Umsätze abgerufen.</td></tr>'}</tbody></table>`},
 uebersicht(){const heute=T.filter(t=>t.d.startsWith('2026-11-26'));const rem=KL.filter(k=>k.material).sort((a,b)=>a.erster.localeCompare(b.erster));
 return`<h1>Guten Morgen</h1><p class="sub">Donnerstag, 26. November 2026 · ${heute.length} Termine heute</p>
 <div class="grid"><div class="card"><h2>Material vor dem Ersttermin</h2>${rem.map(k=>{const d=tage(k.erster),m=k.material;return`<div class="rem"><div class="days ${!m.versandt&&d<=7?'due':''}">${d}<small>Tage</small></div><div><b>${esc(k.name)}</b><br><span class="sub" style="margin:0">Ersttermin ${fd(k.erster)}, ${ft(k.erster)} · ${m.versandt?`versandt am ${new Date(m.am).toLocaleDateString('de-DE')} (${m.wie})`:d<=7?'<span class="mark">jetzt versenden</span>':'Erinnerung ab '+new Date(new Date(k.erster)-7*864e5).toLocaleDateString('de-DE')}</span></div>${m.versandt?'<span class="st" style="--c:var(--ok)">erledigt</span>':`<button data-send="${k.id}" ${d>7?'disabled':''}>Versandt</button>`}</div>`}).join('')}</div>
@@ -130,10 +141,10 @@ return`<h1>Rechnungen</h1><p class="sub">Automatischer Lauf am 1. jedes Monats, 
 <div><div class="paper"><div class="row"><div><h3>Rechnung 2026-12-001</h3>Lernpraxis Muster · Musterstraße 1 · 12345 Musterstadt</div></div><p>${esc(p.k.kostentraeger)}<br>betr. ${esc(p.k.name)}<br>Leistungszeitraum: November 2026</p>
 <table><thead><tr><th>Datum</th><th>Leistung</th><th class="n">Betrag</th></tr></thead><tbody>${p.ts.map(t=>`<tr><td>${new Date(t.d).toLocaleDateString('de-DE')}</td><td>Lerntherapie 60 min${t.s=='ausgefallen'?' (Ausfall < 24 h)':t.s=='unent'?' (nicht erschienen)':''}</td><td class="n">${eur(p.k.satz)}</td></tr>`).join('')}<tr><td></td><td><b>Gesamt</b></td><td class="n"><b>${eur(p.sum)}</b></td></tr></tbody></table>
 <p style="font-size:11px;color:#5d6973">Gem. § 4 Nr. 21 UStG umsatzsteuerfrei (zu prüfen) · Zahlbar innerhalb 14 Tagen</p></div><p class="sub" style="margin-top:8px">PDF-Vorschau</p></div></div>`}};
-const NAV=[['uebersicht','Übersicht'],['kalender','Kalender'],['klienten','Klienten'],['doku','Dokumentieren'],['rechnungen','Rechnungen']];
+const NAV=[['uebersicht','Übersicht'],['kalender','Kalender'],['klienten','Klienten'],['doku','Dokumentieren'],['rechnungen','Rechnungen'],['umsaetze','Umsätze']];
 const nav=document.getElementById('nav'),main=document.getElementById('main'),pop=document.getElementById('pop'),dlg=document.getElementById('dlg');
 function render(){let v=location.hash.slice(1)||'uebersicht';if(!V[v]||v=='akte'&&!V._k)v='uebersicht';
-nav.innerHTML=nav.firstElementChild.outerHTML+NAV.map(([i,l])=>`<a href="#${i}" class="${v==i||(v=='akte'&&i=='klienten')?'on':''}">${l}${i=='uebersicht'&&offen().length?`<span class="badge">${offen().length}</span>`:''}</a>`).join('');
+nav.innerHTML=nav.firstElementChild.outerHTML+NAV.map(([i,l])=>`<a href="#${i}" class="${v==i||(v=='akte'&&i=='klienten')?'on':''}">${l}${i=='uebersicht'&&offen().length?`<span class="badge">${offen().length}</span>`:''}${i=='umsaetze'&&U.neu?`<span class="badge" title="neue Umsätze">${U.neu}</span>`:''}</a>`).join('');
 main.innerHTML=V[v]()+'<p class="note">Entwurf mit erfundenen Beispieldaten.</p>'}
 function status(id){const t=T.find(x=>x.id==id),k=kl(t.k),h=(new Date(t.d)-NOW)/36e5,vor=h>0;
 dlg.innerHTML=`<h2>${esc(k.name)}</h2><div class="sub" style="margin:0">${fd(t.d)}, ${ft(t.d)} · aktuell ${st(t.s)}</div>
@@ -143,7 +154,8 @@ dlg.innerHTML=`<h2>${esc(k.name)}</h2><div class="sub" style="margin:0">${fd(t.d
 function edit(id){const k=kl(id)||{name:'',geb:'',schwer:'',kontakt:'',satz:58,kostentraeger:'Selbstzahler'};
 dlg.innerHTML=`<h2>${id?'Klient bearbeiten':'Neuer Klient'}</h2><label>Name</label><input value="${esc(k.name)}"><label>Jahrgang</label><input value="${esc(k.geb)}"><label>Schwerpunkt</label><input value="${esc(k.schwer)}"><label>Kontakt</label><input value="${esc(k.kontakt)}"><label>Kostenträger</label><select><option>Selbstzahler</option><option ${k.kostentraeger.startsWith('Jugend')?'selected':''}>Jugendamt (§ 35a SGB VIII)</option></select><label>Stundensatz (€)</label><input type="number" value="${k.satz}">${id?'':'<label>Ersttermin</label><input type="datetime-local"><p class="hint">Mit Ersttermin wird automatisch eine Material-Erinnerung 7 Tage vorher angelegt.</p>'}
 <div class="row" style="margin-top:14px"><span class="sp"></span><button data-close>Abbrechen</button><button class="pri" data-close>Speichern</button></div>`;pop.classList.add('on')}
-document.addEventListener('click',e=>{const b=e.target.closest('[data-term],[data-set],[data-close],[data-send],[data-go],[data-kl],[data-tab],[data-edit],[data-archive],[data-doku],[data-arch],[data-neu]');if(!b)return;const d=b.dataset;
+document.addEventListener('click',e=>{if(e.target.closest('[data-abruf]')){fetch('/api/umsaetze/abruf',{method:'POST'}).then(async()=>{await ladeUmsatzStatus();render()});return}
+const b=e.target.closest('[data-term],[data-set],[data-close],[data-send],[data-go],[data-kl],[data-tab],[data-edit],[data-archive],[data-doku],[data-arch],[data-neu]');if(!b)return;const d=b.dataset;
 if(d.term)return status(d.term);
 if(d.set){T.find(t=>t.id==d.id).s=d.set;pop.classList.remove('on');return render()}
 if('close' in d){pop.classList.remove('on');return}
@@ -158,5 +170,8 @@ if('arch' in d){V._arch=!V._arch;return render()}
 if('neu' in d)return edit(0)});
 document.addEventListener('submit',e=>{e.preventDefault();const k=+document.getElementById('dk').value,d=document.getElementById('dd').value,txt=[document.getElementById('dt').value,document.getElementById('db').value].filter(Boolean).join(' – ');
 const t=T.find(t=>t.k==k&&t.d==d);if(t){t.s='statt';t.txt=txt}else T.push({id:T.length+1,k,d,s:'statt',txt,dauer:60});V._k=k;V._tab='hist';location.hash='akte';render()});
-addEventListener('hashchange',render);render();
+document.addEventListener('change',async e=>{if(e.target.matches('[data-filter]')){U.nur=e.target.value;await ladeUmsaetze();render()}});
+addEventListener('hashchange',async()=>{if(location.hash=='#umsaetze'){await ladeUmsatzStatus();await ladeUmsaetze()}render()});
+(async()=>{await ladeUmsatzStatus();if(location.hash=='#umsaetze')await ladeUmsaetze();render()})();
+setInterval(async()=>{const vorher=U.neu;await ladeUmsatzStatus();if(location.hash=='#umsaetze'&&U.neu){await ladeUmsaetze()}if(vorher!=U.neu||location.hash=='#umsaetze')render()},60000);
 }</script></body></html>

@@ -5,11 +5,13 @@ import { fileURLToPath } from 'node:url';
 import { knex } from './db.js';
 import { getKlientenRoutes } from './routes/klientenRoutes.js';
 import { getTermineRoutes } from './routes/termineRoutes.js';
+import { getUmsaetzeRoutes } from './routes/umsaetzeRoutes.js';
+import { erstelleUmsatzDienst } from './services/umsatzDienst.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
 
-export function erstelleApp(db) {
+export function erstelleApp(db, { umsatzDienst = erstelleUmsatzDienst(db) } = {}) {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
 
@@ -24,6 +26,7 @@ export function erstelleApp(db) {
 
   app.use('/api/klienten', getKlientenRoutes(db));
   app.use('/api/termine', getTermineRoutes(db));
+  app.use('/api/umsaetze', getUmsaetzeRoutes(db, umsatzDienst));
 
   app.use(express.static(path.join(__dirname, '..', 'public')));
 
@@ -36,5 +39,7 @@ export function erstelleApp(db) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (process.env.DB_AUTO_MIGRATE === 'true') await knex.migrate.latest();
-  erstelleApp(knex).listen(PORT, () => console.log(`Lerntherapie-Manager auf http://localhost:${PORT}`));
+  const umsatzDienst = erstelleUmsatzDienst(knex);
+  if (process.env.FINTS_ZEITPLAN !== 'aus') umsatzDienst.starteZeitplan();
+  erstelleApp(knex, { umsatzDienst }).listen(PORT, () => console.log(`Lerntherapie-Manager auf http://localhost:${PORT}`));
 }
