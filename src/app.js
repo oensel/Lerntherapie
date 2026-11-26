@@ -11,11 +11,19 @@ import { getRechnungenRoutes } from './routes/rechnungenRoutes.js';
 import { erstelleRechnungsDienst } from './services/rechnungsDienst.js';
 import { erstelleMailDienst } from './services/mailDienst.js';
 import { getEinstellungenRoutes } from './routes/einstellungenRoutes.js';
+import { getKonfigRoutes } from './routes/konfigRoutes.js';
+import { getZahlerRoutes, getTherapienRoutes } from './routes/zahlerTherapienRoutes.js';
+import { erstelleKonfigDienst } from './services/konfigDienst.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
 
-export function erstelleApp(db, { rechnungsDienst = erstelleRechnungsDienst(db), umsatzDienst = erstelleUmsatzDienst(db, { nachAbruf: rechnungsDienst.abgleichen }), mailDienst = erstelleMailDienst(db) } = {}) {
+export function erstelleApp(db, {
+  konfig = erstelleKonfigDienst(db),
+  rechnungsDienst = erstelleRechnungsDienst(db),
+  umsatzDienst = erstelleUmsatzDienst(db, { werte: konfig.wirksam, nachAbruf: rechnungsDienst.abgleichen }),
+  mailDienst = erstelleMailDienst(db, { werte: konfig.wirksam }),
+} = {}) {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
 
@@ -32,7 +40,10 @@ export function erstelleApp(db, { rechnungsDienst = erstelleRechnungsDienst(db),
   app.use('/api/termine', getTermineRoutes(db));
   app.use('/api/umsaetze', getUmsaetzeRoutes(db, umsatzDienst));
   app.use('/api/einstellungen', getEinstellungenRoutes(db));
-  app.use('/api/rechnungen', getRechnungenRoutes(db, rechnungsDienst, mailDienst));
+  app.use('/api/konfiguration', getKonfigRoutes(konfig));
+  app.use('/api/zahler', getZahlerRoutes(db));
+  app.use('/api/therapien', getTherapienRoutes(db));
+  app.use('/api/rechnungen', getRechnungenRoutes(db, rechnungsDienst, mailDienst, konfig.wirksam));
 
   app.use(express.static(path.join(__dirname, '..', 'public')));
 
@@ -45,9 +56,10 @@ export function erstelleApp(db, { rechnungsDienst = erstelleRechnungsDienst(db),
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (process.env.DB_AUTO_MIGRATE === 'true') await knex.migrate.latest();
+  const konfig = erstelleKonfigDienst(knex);
   const rechnungsDienst = erstelleRechnungsDienst(knex);
-  const umsatzDienst = erstelleUmsatzDienst(knex, { nachAbruf: rechnungsDienst.abgleichen });
+  const umsatzDienst = erstelleUmsatzDienst(knex, { werte: konfig.wirksam, nachAbruf: rechnungsDienst.abgleichen });
   if (process.env.FINTS_ZEITPLAN !== 'aus') umsatzDienst.starteZeitplan();
   if (process.env.RECHNUNG_ZEITPLAN !== 'aus') rechnungsDienst.starteZeitplan();
-  erstelleApp(knex, { umsatzDienst, rechnungsDienst }).listen(PORT, () => console.log(`Lerntherapie-Manager auf http://localhost:${PORT}`));
+  erstelleApp(knex, { konfig, umsatzDienst, rechnungsDienst }).listen(PORT, () => console.log(`Lerntherapie-Manager auf http://localhost:${PORT}`));
 }

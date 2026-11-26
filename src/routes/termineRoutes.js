@@ -1,6 +1,6 @@
 import { Router } from 'express';
 
-const FELDER = ['klient_id', 'beginn', 'ende', 'art', 'status', 'ort', 'notiz', 'dokumentation'];
+const FELDER = ['klient_id', 'therapie_id', 'beginn', 'ende', 'art', 'status', 'ort', 'notiz', 'dokumentation'];
 export const STATUS = ['geplant', 'stattgefunden', 'abgesagt', 'ausgefallen', 'unentschuldigt'];
 const pruefe = (b) => (b.status && !STATUS.includes(b.status) ? 'Unbekannter Status'
   : b.beginn && b.ende && new Date(b.ende) <= new Date(b.beginn) ? 'Ende muss nach dem Beginn liegen' : null);
@@ -23,7 +23,12 @@ export function getTermineRoutes(knex) {
     if (!req.body?.beginn || !req.body?.ende) return res.status(400).json({ fehler: 'Beginn und Ende fehlen' });
     const f = pruefe(req.body);
     if (f) return res.status(400).json({ fehler: f });
-    const [t] = await knex('termine').insert(auswahl(req.body)).returning('*');
+    const daten = auswahl(req.body);
+    // Ohne Angabe: erste aktive Therapie des Klienten
+    if (!daten.therapie_id && daten.klient_id) {
+      daten.therapie_id = (await knex('therapien').where({ klient_id: daten.klient_id, aktiv: true }).orderBy('id').first('id'))?.id ?? null;
+    }
+    const [t] = await knex('termine').insert(daten).returning('*');
     res.status(201).json(t);
   });
 

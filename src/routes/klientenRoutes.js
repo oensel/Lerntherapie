@@ -1,7 +1,7 @@
 import { Router } from 'express';
 
 const FELDER = ['vorname', 'nachname', 'geburtsdatum', 'schule', 'klasse', 'schwerpunkt',
-  'kostentraeger', 'stundensatz_cent', 'ausfall_cent', 'unentschuldigt_cent', 'sorgeberechtigte', 'email', 'telefon', 'adresse', 'notizen', 'aktiv',
+  'kostentraeger', 'sorgeberechtigte', 'email', 'telefon', 'adresse', 'notizen', 'aktiv',
   'geburtsjahr', 'aufnahme_datum', 'material_noetig', 'material_versandt_am', 'material_versand_art'];
 const KOSTENTRAEGER = ['eltern', 'jugendamt'];
 

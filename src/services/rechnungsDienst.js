@@ -4,31 +4,40 @@ import { starteTagesplan } from './zeitplan.js';
 const ZAHLUNGSZIEL_TAGE = 14;
 
 export function erstelleRechnungsDienst(knex, { env = process.env, log = console } = {}) {
-  // Je aktivem Klient die noch nicht abgerechneten, berechenbaren Termine des Monats; dazu vergangene Termine ohne Status
+  // Je Therapie die noch nicht abgerechneten, berechenbaren Termine des Monats; dazu vergangene Termine ohne Status.
+  // Termine ohne Therapie zählen zur ersten Therapie des Klienten.
   async function vorschau(monat) {
     const [von, bis] = monatsGrenzen(monat);
     const termine = await knex('termine').where('beginn', '>=', von).where('beginn', '<', bis).whereNotNull('klient_id');
-    const klienten = await knex('klienten').whereIn('id', [...new Set(termine.map((t) => t.klient_id))]);
-    const vorhandene = await knex('rechnungen').where({ leistungsmonat: monat }).whereNot({ status: 'storniert' }).pluck('klient_id');
+    const klientIds = [...new Set(termine.map((t) => t.klient_id))];
+    const klienten = await knex('klienten').whereIn('id', klientIds);
+    const therapien = await knex('therapien').whereIn('klient_id', klientIds).orderBy('id');
+    const zahler = await knex('zahler').whereIn('klient_id', klientIds);
+    const vorhandene = await knex('rechnungen').where({ leistungsmonat: monat }).whereNot({ status: 'storniert' }).pluck('therapie_id');
     const standard = await knex('einstellungen').where({ id: 1 }).first();
     const jetzt = new Date();
-    return klienten.map((k) => {
-      const eigene = termine.filter((t) => t.klient_id === k.id);
-      const pos = positionen(eigene, saetze(k, standard));
+    const zuTherapie = (t) => t.therapie_id ?? therapien.find((th) => th.klient_id === t.klient_id)?.id;
+    return therapien.map((th) => {
+      const k = klienten.find((x) => x.id === th.klient_id);
+      const z = zahler.find((x) => x.id === th.zahler_id) ?? null;
+      const eigene = termine.filter((t) => zuTherapie(t) === th.id);
+      const pos = positionen(eigene, saetze(th, standard), th.bezeichnung);
       return {
-        klient_id: k.id, name: `${k.vorname} ${k.nachname}`, klient: k, positionen: pos,
+        klient_id: k.id, therapie_id: th.id, name: `${k.vorname} ${k.nachname}`, therapie: th.bezeichnung,
+        zahler: z, zahler_name: z?.name ?? null, positionen: pos,
         betrag_cent: pos.reduce((a, p) => a + p.betrag_cent, 0),
         ohne_status: eigene.filter((t) => t.status === 'geplant' && new Date(t.beginn) < jetzt).length,
         noch_geplant: eigene.filter((t) => t.status === 'geplant' && new Date(t.beginn) >= jetzt).length,
-        bereits_berechnet: vorhandene.includes(k.id),
+        bereits_berechnet: vorhandene.includes(th.id),
       };
-    }).filter((v) => v.positionen.length || v.ohne_status).sort((a, b) => a.name.localeCompare(b.name));
+    }).filter((v) => v.positionen.length || v.ohne_status)
+      .sort((a, b) => a.name.localeCompare(b.name) || a.therapie.localeCompare(b.therapie));
   }
 
-  // Erstellt je Klient eine Rechnung; Klienten mit bestehender Rechnung im Monat werden übersprungen
-  async function lauf(monat, { klientIds } = {}) {
-    const liste = (await vorschau(monat)).filter((v) => v.positionen.length && !v.bereits_berechnet && v.betrag_cent > 0
-      && (!klientIds || klientIds.includes(v.klient_id)));
+  // Erstellt je Therapie eine Rechnung an deren Zahler; Therapien mit Rechnung im Monat oder ohne Zahler werden übersprungen
+  async function lauf(monat, { klientIds, therapieIds } = {}) {
+    const liste = (await vorschau(monat)).filter((v) => v.positionen.length && !v.bereits_berechnet && v.betrag_cent > 0 && v.zahler
+      && (!klientIds || klientIds.includes(v.klient_id)) && (!therapieIds || therapieIds.includes(v.therapie_id)));
     const erstellt = [];
     for (const v of liste) {
       const r = await knex.transaction(async (trx) => {
@@ -37,9 +46,10 @@ export function erstelleRechnungsDienst(knex, { env = process.env, log = console
         const nummern = await trx('rechnungen').where('nummer', 'like', `${tagStr(heute).slice(0, 7)}-%`).pluck('nummer');
         const faellig = new Date(heute); faellig.setDate(faellig.getDate() + ZAHLUNGSZIEL_TAGE);
         const [neu] = await trx('rechnungen').insert({
-          nummer: naechsteNummer(nummern, heute), klient_id: v.klient_id, leistungsmonat: monat,
+          nummer: naechsteNummer(nummern, heute), klient_id: v.klient_id, therapie_id: v.therapie_id, zahler_id: v.zahler.id,
+          therapie_bezeichnung: v.therapie, empfaenger_email: v.zahler.email, leistungsmonat: monat,
           rechnungsdatum: tagStr(heute), faellig_am: tagStr(faellig), betrag_cent: v.betrag_cent,
-          empfaenger: empfaengerText(v.klient), klient_name: v.name,
+          empfaenger: empfaengerText(v.zahler), klient_name: v.name,
         }).returning('*');
         await trx('rechnungspositionen').insert(v.positionen.map((p) => ({ ...p, rechnung_id: neu.id })));
         await trx('termine').whereIn('id', v.positionen.map((p) => p.termin_id)).update({ rechnung_id: neu.id });

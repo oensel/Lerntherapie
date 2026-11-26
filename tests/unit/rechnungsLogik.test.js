@@ -27,7 +27,8 @@ test('Zahlungsabgleich über Nummer im Verwendungszweck und Betrag', () => {
 });
 
 test('Vormonat über den Jahreswechsel', () => assert.equal(vormonat(new Date(2027, 0, 1)), '2026-12'));
-test('Empfänger', () => assert.equal(empfaengerText({ vorname: 'A', nachname: 'B', sorgeberechtigte: 'Eva B', adresse: 'Weg 1\n12345 Ort', kostentraeger: 'eltern' }), 'Eva B\nWeg 1\n12345 Ort'));
+test('Empfänger aus dem Zahler', () => assert.equal(empfaengerText({ name: 'Eva B', adresse: 'Weg 1\n12345 Ort' }), 'Eva B\nWeg 1\n12345 Ort'));
+test('Positionstext mit Therapiebezeichnung', () => assert.equal(positionen([t(1, 3, 'stattgefunden')], { stattgefunden: 1 }, 'LRS-Therapie')[0].beschreibung, 'LRS-Therapie 60 min'));
 
 import { naechsteMahnstufe, neueMahnung } from '../../src/services/rechnungsLogik.js';
 const E = { karenzTage: 7, fristTage: 10, gebuehren: [0, 500, 1000] };

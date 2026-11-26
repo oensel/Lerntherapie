@@ -41,7 +41,7 @@ export async function erstelleRechnungPdf(r, positionen, praxis = praxisAusEnv()
   text(`Rechnung ${r.nummer}`, L, y, { font: fb, size: 14 });
   text(`Datum: ${datum(r.rechnungsdatum)}`, R, y, { rechts: true });
   y -= 22;
-  text(`Klient/in: ${r.klient_name}`, L, y);
+  text(`Klient/in: ${r.klient_name}${r.therapie_bezeichnung ? ` · ${r.therapie_bezeichnung}` : ''}`, L, y);
   y -= 14;
   text(`Leistungszeitraum: ${monatName(r.leistungsmonat)}`, L, y);
 

@@ -5,12 +5,12 @@ import { starteTagesplan } from './zeitplan.js';
 export const STANDARD_ABRUFZEITEN = ['08:00', '16:00'];
 
 // Höchstens ein Abruf gleichzeitig (Zeitplan und Knopf „Jetzt abrufen“ teilen sich die Sperre)
-export function erstelleUmsatzDienst(knex, { env = process.env, log = console, abruf = holeUmsaetze, nachAbruf } = {}) {
+export function erstelleUmsatzDienst(knex, { env = process.env, werte = async () => env, log = console, abruf = holeUmsaetze, nachAbruf } = {}) {
   let laufend = null;
 
   function starteAbruf(ausloeser) {
     if (!laufend) {
-      laufend = abruf(knex, { env, ausloeser, log })
+      laufend = werte().then((aktuell) => abruf(knex, { env: aktuell, ausloeser, log }))
         .then(async (e) => { if (nachAbruf) await nachAbruf().catch((f) => log.error?.('Nach dem Abruf:', f)); return e; })
         .finally(() => { laufend = null; });
     }

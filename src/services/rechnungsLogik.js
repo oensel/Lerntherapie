@@ -15,24 +15,24 @@ export const vormonat = (jetzt = new Date()) => {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
 };
 
-export function positionsText(termin) {
+export function positionsText(termin, bezeichnung = 'Lerntherapie') {
   const min = Math.round((new Date(termin.ende) - new Date(termin.beginn)) / 60000);
   const zusatz = termin.status === 'ausgefallen' ? ' (Ausfall, < 24 h abgesagt)' : termin.status === 'unentschuldigt' ? ' (nicht erschienen)' : '';
-  return `Lerntherapie ${min} min${zusatz}`;
+  return `${bezeichnung} ${min} min${zusatz}`;
 }
 
-// Geltende Sätze eines Klienten: eigener Wert, sonst der allgemeine Standard (NULL = Standard)
-export function saetze(klient, standard) {
-  const w = (feld) => klient?.[feld] ?? standard[feld];
+// Geltende Sätze einer Therapie: eigener Wert, sonst der allgemeine Standard (NULL = Standard)
+export function saetze(therapie, standard) {
+  const w = (feld) => therapie?.[feld] ?? standard[feld];
   return { stattgefunden: w('stundensatz_cent'), ausgefallen: w('ausfall_cent'), unentschuldigt: w('unentschuldigt_cent') };
 }
 
 // Positionen eines Klienten: je berechnetem Termin der Betrag für seinen Status; Beträge von 0 € entfallen
-export function positionen(termine, satzJeStatus) {
+export function positionen(termine, satzJeStatus, bezeichnung) {
   return termine
     .filter((t) => BERECHNET.includes(t.status) && !t.rechnung_id && satzJeStatus[t.status] > 0)
     .sort((a, b) => new Date(a.beginn) - new Date(b.beginn))
-    .map((t) => ({ termin_id: t.id, datum: tagStr(new Date(t.beginn)), beschreibung: positionsText(t), betrag_cent: satzJeStatus[t.status] }));
+    .map((t) => ({ termin_id: t.id, datum: tagStr(new Date(t.beginn)), beschreibung: positionsText(t, bezeichnung), betrag_cent: satzJeStatus[t.status] }));
 }
 
 // Nächste Nummer im Format JJJJ-MM-NNN aus den bereits vergebenen Nummern desselben Präfixes
@@ -42,9 +42,9 @@ export function naechsteNummer(vorhandene, datum = new Date()) {
   return praefix + String(max + 1).padStart(3, '0');
 }
 
-export function empfaengerText(k) {
-  const name = k.sorgeberechtigte || `${k.vorname} ${k.nachname}`;
-  return [k.kostentraeger === 'jugendamt' ? 'Jugendamt' : null, name, k.adresse].filter(Boolean).join('\n');
+// Anschriftenfeld aus dem Zahler (Name + mehrzeilige Adresse)
+export function empfaengerText(zahler) {
+  return [zahler.name, zahler.adresse].filter(Boolean).join('\n');
 }
 
 // Zahlungsabgleich: Umsatz passt, wenn er ein Eingang ist, die Rechnungsnummer im Verwendungszweck steht

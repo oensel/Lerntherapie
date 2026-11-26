@@ -9,7 +9,7 @@ const ST = {
   unentschuldigt: ['Unentschuldigt', '--unent'],
 };
 const BERECHNET = ['stattgefunden', 'ausgefallen', 'unentschuldigt'];
-const KT = { eltern: 'Selbstzahler', jugendamt: 'Jugendamt (§ 35a SGB VIII)' };
+const ZART = { eltern: 'Eltern / Elternteil', jugendamt: 'Jugendamt (§ 35a SGB VIII)', sonstige: 'Sonstige' };
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const pad = (n) => String(n).padStart(2, '0');
@@ -42,6 +42,8 @@ async function api(pfad, { methode = 'GET', daten } = {}) {
 let KL = [];
 let T = [];
 let RE = []; // erstellte Rechnungen
+let ZA = [], TH = []; // Zahler und Therapien aller Klienten
+let KONF = null; // Einstellungen Praxis/Mail/FinTS (nur auf der Einstellungsseite geladen)
 let EIN = { stundensatz_cent: 0, ausfall_cent: 0, unentschuldigt_cent: 0 }; // allgemeine Sätze
 const SATZ = [['stundensatz_cent', 'Therapiestunde (stattgefunden)'], ['ausfall_cent', 'Ausfall (< 24 h abgesagt)'], ['unentschuldigt_cent', 'Nicht erschienen (unentschuldigt)']];
 const satzVon = (roh, f) => roh?.[f] ?? EIN[f];
@@ -56,7 +58,7 @@ const S = { woche: montag(new Date()), fehler: null };
 
 function abbildenTermin(t) {
   const b = new Date(t.beginn);
-  return { id: t.id, k: t.klient_id, d: lokal(b), beginn: b, dauer: Math.round((new Date(t.ende) - b) / 60000), s: t.status, txt: t.dokumentation || '' };
+  return { th: t.therapie_id, id: t.id, k: t.klient_id, d: lokal(b), beginn: b, dauer: Math.round((new Date(t.ende) - b) / 60000), s: t.status, txt: t.dokumentation || '' };
 }
 
 function abbildenKlient(k) {
@@ -70,8 +72,6 @@ function abbildenKlient(k) {
     schwer: k.schwerpunkt || '—',
     kontakt: [k.sorgeberechtigte, k.telefon].filter(Boolean).join(' · ') || '—',
     email: k.email,
-    satz: satzVon(k, 'stundensatz_cent') / 100,
-    kostentraeger: KT[k.kostentraeger] ?? k.kostentraeger,
     seit: k.aufnahme_datum,
     aktiv: k.aktiv,
     erster,
@@ -82,13 +82,18 @@ function abbildenKlient(k) {
 }
 
 async function laden() {
-  const [kl, te, re, ein] = await Promise.all([api('/klienten?archiv=true'), api('/termine'), api('/rechnungen'), api('/einstellungen')]);
-  RE = re; EIN = ein;
+  const [kl, te, re, ein, za, th] = await Promise.all([api('/klienten?archiv=true'), api('/termine'), api('/rechnungen'), api('/einstellungen'), api('/zahler'), api('/therapien')]);
+  RE = re; EIN = ein; ZA = za; TH = th;
   T = te.map(abbildenTermin);
   KL = kl.map(abbildenKlient);
 }
 
-const kl = (id) => KL.find((k) => k.id == id) ?? { name: '(gelöscht)', satz: 0, kostentraeger: '' };
+const kl = (id) => KL.find((k) => k.id == id) ?? { name: '(gelöscht)', roh: {} };
+const zahlerVon = (kid) => ZA.filter((z) => z.klient_id === kid);
+const therapienVon = (kid, nurAktive = false) => TH.filter((t) => t.klient_id === kid && (!nurAktive || t.aktiv));
+const zahlerName = (id) => ZA.find((z) => z.id === id)?.name ?? null;
+const therapieName = (id) => TH.find((t) => t.id === id)?.bezeichnung ?? '';
+const therapieOptionen = (kid, gewaehlt) => therapienVon(kid, true).map((t) => `<option value="${t.id}" ${t.id == gewaehlt ? 'selected' : ''}>${esc(t.bezeichnung)}${t.zahler_id ? ' – ' + esc(zahlerName(t.zahler_id)) : ''}</option>`).join('');
 // Material-Erinnerungen: Ersttermin steht noch bevor oder Material ist noch nicht verschickt
 const materialListe = () => KL.filter((k) => k.aktiv && k.material && k.erster && (tageBis(k.erster) >= 0 || !k.material.versandt))
   .sort((a, b) => a.erster.localeCompare(b.erster));
@@ -153,19 +158,24 @@ ${sichtbar.map((d) => `<div class="col" style="height:${hs.length * 56}px">${woc
     const such = (S.suche || '').toLowerCase();
     const zeig = KL.filter((k) => (V._arch ? !k.aktiv : k.aktiv) && (!such || k.name.toLowerCase().includes(such)));
     return `<div class="row"><div><h1>Klienten</h1><p class="sub">${KL.filter((k) => k.aktiv).length} aktiv · ${KL.filter((k) => !k.aktiv).length} archiviert</p></div><span class="sp"></span><input data-suche placeholder="Suchen …" style="width:200px" value="${esc(S.suche || '')}"><button data-arch>${V._arch ? 'Aktive zeigen' : 'Archiv zeigen'}</button><button class="pri" data-edit="0">+ Neuer Klient</button></div>
-<table class="stack"><thead><tr><th>Name</th><th>Schwerpunkt</th><th>Kostenträger</th><th>Nächster Termin</th><th class="n">Satz</th></tr></thead><tbody>
-${zeig.map((k) => { const n = T.filter((t) => t.k === k.id && t.s === 'geplant' && t.beginn >= new Date()).sort((a, b) => a.d.localeCompare(b.d))[0]; return `<tr class="click" data-kl="${k.id}"><td><b>${esc(k.name)}</b><br><span class="sub">Jg. ${esc(k.geb)}</span></td><td>${esc(k.schwer)}</td><td>${esc(k.kostentraeger)}</td><td>${n ? fd(n.d) + ', ' + ft(n.d) : '—'}</td><td class="n">${eur(k.satz)}</td></tr>`; }).join('') || '<tr><td colspan="5" class="sub">Keine Klienten.</td></tr>'}</tbody></table>`;
+<table class="stack"><thead><tr><th>Name</th><th>Schwerpunkt</th><th>Therapien · Zahler</th><th>Nächster Termin</th></tr></thead><tbody>
+${zeig.map((k) => { const n = T.filter((t) => t.k === k.id && t.s === 'geplant' && t.beginn >= new Date()).sort((a, b) => a.d.localeCompare(b.d))[0]; return `<tr class="click" data-kl="${k.id}"><td><b>${esc(k.name)}</b><br><span class="sub">Jg. ${esc(k.geb)}</span></td><td>${esc(k.schwer)}</td><td>${therapienVon(k.id, true).map((t) => `${esc(t.bezeichnung)}<span class="sub"> · ${esc(zahlerName(t.zahler_id) ?? 'kein Zahler')}</span>`).join('<br>') || '<span class="sub">keine Therapie</span>'}</td><td>${n ? fd(n.d) + ', ' + ft(n.d) : '—'}</td></tr>`; }).join('') || '<tr><td colspan="4" class="sub">Keine Klienten.</td></tr>'}</tbody></table>`;
   },
 
   akte() {
     const k = kl(V._k), hist = T.filter((t) => t.k === k.id).sort((a, b) => b.d.localeCompare(a.d)), tab = V._tab || 'hist';
     const z = (s) => hist.filter((t) => t.s === s).length;
-    return `<button data-go="klienten">‹ Alle Klienten</button><div class="row" style="margin-top:12px"><div><h1>${esc(k.name)}</h1><p class="sub">${esc(k.schwer)} · ${esc(k.kostentraeger)} · ${eur(k.satz)} je Einheit</p></div><span class="sp"></span><button data-edit="${k.id}">Bearbeiten</button><button data-archive="${k.id}">${k.aktiv ? 'Archivieren' : 'Reaktivieren'}</button><button class="pri" data-doku="${k.id}">+ Eintrag</button></div>
+    return `<button data-go="klienten">‹ Alle Klienten</button><div class="row" style="margin-top:12px"><div><h1>${esc(k.name)}</h1><p class="sub">${esc(k.schwer)} · ${therapienVon(k.id, true).map((t) => esc(t.bezeichnung)).join(', ') || 'noch keine Therapie angelegt'}</p></div><span class="sp"></span><button data-edit="${k.id}">Bearbeiten</button><button data-archive="${k.id}">${k.aktiv ? 'Archivieren' : 'Reaktivieren'}</button><button class="pri" data-doku="${k.id}">+ Eintrag</button></div>
 <div class="row">${['stattgefunden', 'ausgefallen', 'unentschuldigt', 'abgesagt'].map((s) => `<div class="card" style="flex:1;min-width:130px"><div style="font-size:24px;font-weight:700">${z(s)}</div>${st(s)}</div>`).join('')}</div>
 <div class="tabs">${[['hist', 'Terminhistorie'], ['stamm', 'Stammdaten'], ['re', 'Rechnungen']].map(([i, l]) => `<button data-tab="${i}" class="${tab === i ? 'on' : ''}">${l}</button>`).join('')}</div>
-${tab === 'hist' ? `<div class="tl">${hist.map((t) => `<div style="--c:var(${ST[t.s][1]})"><b>${fd(t.d)} ${ft(t.d)}</b> · ${st(t.s)} <button data-term="${t.id}" style="min-height:30px;font-size:13px;margin-left:6px">ändern</button><div>${t.txt ? esc(t.txt) : '<span class="sub">Keine Aufzeichnung</span>'}</div></div>`).join('') || '<p class="sub">Noch keine Termine.</p>'}</div>`
-      : tab === 'stamm' ? `<div class="grid"><div class="card"><label>Kontakt (Erziehungsberechtigte)</label>${esc(k.kontakt)}<label>E-Mail</label>${esc(k.email || '—')}<label>Jahrgang</label>${esc(k.geb)}<label>In Therapie seit</label>${k.seit ? datum(k.seit) : k.erster ? 'Ersttermin ' + fd(k.erster) : '—'}</div><div class="card"><label>Rechnungsempfänger</label>${esc(k.kostentraeger)}<label>Abrechnung je Termin</label>${SATZ.map(([f, l]) => `${l}: <b>${eur(satzVon(k.roh, f) / 100)}</b>${k.roh[f] == null ? ' <span class="sub">(Standard)</span>' : ''}`).join('<br>')}<br>Abgesagt (≥ 24 h): kostenfrei</div></div>`
-        : `<table><thead><tr><th>Nr.</th><th>Monat</th><th class="n">Betrag</th><th>Status</th></tr></thead><tbody>${RE.filter((r) => r.klient_id === k.id).map((r) => `<tr><td><a href="/api/rechnungen/${r.id}/pdf" target="_blank">${esc(r.nummer)}</a></td><td>${monatText(r.leistungsmonat)}</td><td class="n">${eur(r.betrag_cent / 100)}</td><td>${reSt(r)}</td></tr>`).join('') || '<tr><td colspan="4" class="sub">Noch keine Rechnungen.</td></tr>'}</tbody></table>`}`;
+${tab === 'hist' ? `<div class="tl">${hist.map((t) => `<div style="--c:var(${ST[t.s][1]})"><b>${fd(t.d)} ${ft(t.d)}</b>${therapienVon(k.id).length > 1 ? ` · ${esc(therapieName(t.th))}` : ''} · ${st(t.s)} <button data-term="${t.id}" style="min-height:30px;font-size:13px;margin-left:6px">ändern</button><div>${t.txt ? esc(t.txt) : '<span class="sub">Keine Aufzeichnung</span>'}</div></div>`).join('') || '<p class="sub">Noch keine Termine.</p>'}</div>`
+      : tab === 'stamm' ? `<div class="grid"><div class="card"><label>Kontakt (Erziehungsberechtigte)</label>${esc(k.kontakt)}<label>E-Mail</label>${esc(k.email || '—')}<label>Jahrgang</label>${esc(k.geb)}<label>In Therapie seit</label>${k.seit ? datum(k.seit) : k.erster ? 'Ersttermin ' + fd(k.erster) : '—'}</div></div>
+<div class="card"><div class="row"><h2 style="margin:0">Therapien</h2><span class="sp"></span><button data-therapie="0" data-klient="${k.id}" ${zahlerVon(k.id).length ? '' : 'disabled title="Zuerst einen Zahler anlegen"'}>+ Therapie</button></div>
+${therapienVon(k.id).map((t) => `<div class="rem"><div><b>${esc(t.bezeichnung)}</b>${t.aktiv ? '' : ' <span class="st" style="--c:var(--abs)">beendet</span>'}<br><span class="sub" style="margin:0">Zahler: ${esc(zahlerName(t.zahler_id) ?? '— bitte zuordnen')}<br>${SATZ.map(([f, l]) => `${l.split(' (')[0]}: ${eur(satzVon(t, f) / 100)}${t[f] == null ? '' : ' (eigener Betrag)'}`).join(' · ')}</span></div><button data-therapie="${t.id}" data-klient="${k.id}">Bearbeiten</button></div>`).join('') || '<p class="sub">Noch keine Therapie – ohne Therapie wird nichts abgerechnet.</p>'}
+<p class="hint" style="margin-bottom:0">Abgesagt (≥ 24 h) ist immer kostenfrei. Beträge ohne „eigener Betrag“ folgen den Einstellungen.</p></div>
+<div class="card"><div class="row"><h2 style="margin:0">Zahler</h2><span class="sp"></span><button data-zahler="0" data-klient="${k.id}">+ Zahler</button></div>
+${zahlerVon(k.id).map((z) => `<div class="rem"><div><b>${esc(z.name)}</b> <span class="sub">${esc(ZART[z.art] ?? z.art)}</span><br><span class="sub" style="margin:0;white-space:pre-line">${esc(z.adresse || 'Adresse fehlt')}</span><br><span class="sub" style="margin:0">${esc(z.email || 'keine E-Mail')}${z.telefon ? ' · ' + esc(z.telefon) : ''}</span></div><button data-zahler="${z.id}" data-klient="${k.id}">Bearbeiten</button></div>`).join('') || '<p class="sub">Noch kein Zahler – meist ein Elternteil.</p>'}</div></div>`
+        : `<table><thead><tr><th>Nr.</th><th>Monat</th><th class="n">Betrag</th><th>Status</th></tr></thead><tbody>${RE.filter((r) => r.klient_id === k.id).map((r) => `<tr><td><a href="/api/rechnungen/${r.id}/pdf" target="_blank">${esc(r.nummer)}</a></td><td>${monatText(r.leistungsmonat)}${r.therapie_bezeichnung ? `<br><span class="sub">${esc(r.therapie_bezeichnung)}</span>` : ''}</td><td class="n">${eur(r.betrag_cent / 100)}</td><td>${reSt(r)}</td></tr>`).join('') || '<tr><td colspan="4" class="sub">Noch keine Rechnungen.</td></tr>'}</tbody></table>`}`;
   },
 
   doku() {
@@ -174,6 +184,7 @@ ${tab === 'hist' ? `<div class="tl">${hist.map((t) => `<div style="--c:var(${ST[
     const vorschlag = V._k && T.filter((t) => t.k == V._k && t.s === 'geplant' && t.d.slice(0, 10) <= heute()).sort((a, b) => b.d.localeCompare(a.d))[0];
     return `<h1>Sitzung dokumentieren</h1><p class="sub">Was wurde wann gemacht – landet automatisch in der Terminhistorie des Klienten.</p>
 <form class="card" id="dform" style="max-width:640px"><label for="dk">Klient</label><select id="dk">${KL.filter((k) => k.aktiv).map((k) => `<option value="${k.id}" ${k.id == V._k ? 'selected' : ''}>${esc(k.name)}</option>`).join('')}</select>
+${therapienVon(+V._k || KL.find((k) => k.aktiv)?.id, true).length > 1 ? `<label for="dth">Therapie</label><select id="dth">${therapieOptionen(+V._k || KL.find((k) => k.aktiv)?.id, vorschlag?.th)}</select>` : ''}
 <div class="grid" style="gap:10px"><div><label for="dd">Datum &amp; Uhrzeit</label><input id="dd" type="datetime-local" required value="${vorschlag ? vorschlag.d : lokal(jetzt)}"></div><div><label for="dm">Dauer</label><select id="dm">${[45, 60, 90].map((m) => `<option value="${m}" ${m === (vorschlag?.dauer ?? 60) ? 'selected' : ''}>${m} Minuten</option>`).join('')}</select></div></div>
 <label for="dt">Inhalte / Übungen</label><textarea id="dt" rows="4" placeholder="z. B. Silbenschwingen, Lesetext S. 4–6, Diktat mit Fehleranalyse"></textarea>
 <label for="db">Beobachtungen</label><textarea id="db" rows="3" placeholder="Konzentration, Motivation, Fortschritte"></textarea>
@@ -184,7 +195,7 @@ ${tab === 'hist' ? `<div class="tl">${hist.map((t) => `<div style="--c:var(${ST[
   rechnungen() {
     const m = R.monat ||= vormonatStr();
     const vs = R.vorschau?.monat === m ? R.vorschau.liste : null;
-    const neu = vs?.filter((v) => !v.bereits_berechnet && v.betrag_cent > 0) ?? [];
+    const neu = vs?.filter((v) => !v.bereits_berechnet && v.betrag_cent > 0 && v.zahler_name) ?? [];
     const lauf = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1, 6);
     const offen = RE.filter((r) => r.status === 'offen'), summeOffen = offen.reduce((a, r) => a + r.betrag_cent, 0);
     const p = R.auswahl;
@@ -193,9 +204,9 @@ ${tab === 'hist' ? `<div class="tl">${hist.map((t) => `<div style="--c:var(${ST[
 <div class="row"><div class="card" style="flex:1"><div class="sub" style="margin:0">Offen</div><b style="font-size:20px">${eur(summeOffen / 100)}</b> <span class="sub">(${offen.length})</span></div><div class="card" style="flex:1"><div class="sub" style="margin:0">Überfällig</div><b style="font-size:20px">${offen.filter((r) => tagStr(new Date(r.faellig_am)) < heute()).length}</b></div></div>
 ${R.mahn.length ? `<div class="card" style="margin-bottom:14px"><h2>Fällige Mahnungen</h2><table class="stack"><thead><tr><th>Nr.</th><th>Klient</th><th>Fällig seit</th><th class="n">Betrag</th><th></th></tr></thead><tbody>${R.mahn.map((r) => `<tr><td>${esc(r.nummer)}</td><td>${esc(r.klient_name)}</td><td>${datum(r.faellig_am)}</td><td class="n">${eur(r.betrag_cent / 100)}</td><td class="n"><button data-mahnen="${r.id}">${esc(r.faellige_art)} erstellen</button></td></tr>`).join('')}</tbody></table><p class="hint">Vor dem Mahnen „Zahlungen abgleichen“, damit eingegangene Zahlungen berücksichtigt sind.</p></div>` : ''}
 <div class="grid"><div class="card"><div class="row"><h2 style="margin:0">Abrechnung</h2><span class="sp"></span><select data-remonat style="width:auto">${monate.map((x) => `<option value="${x}" ${x === m ? 'selected' : ''}>${monatText(x)}</option>`).join('')}</select></div>
-<table class="stack"><thead><tr><th>Klient</th><th class="n">Einheiten</th><th class="n">Betrag</th></tr></thead><tbody>${!vs ? '<tr><td colspan="3" class="sub">Lädt …</td></tr>' : vs.map((v) => `<tr><td>${esc(v.name)}${v.bereits_berechnet ? ' <span class="st" style="--c:var(--ok)">berechnet</span>' : ''}${v.ohne_status ? ` <span class="st" style="--c:var(--aus)">${v.ohne_status} ohne Status</span>` : ''}${v.noch_geplant ? ` <span class="sub">${v.noch_geplant} noch geplant</span>` : ''}</td><td class="n">${v.positionen.length}</td><td class="n">${eur(v.betrag_cent / 100)}</td></tr>`).join('') || '<tr><td colspan="3" class="sub">Nichts abzurechnen.</td></tr>'}</tbody></table>
+<table class="stack"><thead><tr><th>Klient</th><th class="n">Einheiten</th><th class="n">Betrag</th></tr></thead><tbody>${!vs ? '<tr><td colspan="3" class="sub">Lädt …</td></tr>' : vs.map((v) => `<tr><td>${esc(v.name)}<br><span class="sub">${esc(v.therapie)} · an ${v.zahler_name ? esc(v.zahler_name) : '<b style="color:var(--unent)">kein Zahler</b>'}</span>${v.bereits_berechnet ? ' <span class="st" style="--c:var(--ok)">berechnet</span>' : ''}${v.ohne_status ? ` <span class="st" style="--c:var(--aus)">${v.ohne_status} ohne Status</span>` : ''}${v.noch_geplant ? ` <span class="sub">${v.noch_geplant} noch geplant</span>` : ''}</td><td class="n">${v.positionen.length}</td><td class="n">${eur(v.betrag_cent / 100)}</td></tr>`).join('') || '<tr><td colspan="3" class="sub">Nichts abzurechnen.</td></tr>'}</tbody></table>
 <p class="hint">Berechnet werden stattgefundene, ausgefallene und unentschuldigte Termine. Vergangene Termine ohne Status bitte vorher prüfen – sie werden nicht berechnet.</p><div class="row"><span class="sp"></span><button class="pri" data-lauf ${neu.length ? '' : 'disabled'}>${neu.length} Rechnung${neu.length === 1 ? '' : 'en'} erstellen</button></div>
-<h2 style="margin-top:20px">Erstellte Rechnungen</h2><table class="stack"><thead><tr><th>Nr.</th><th>Klient</th><th>Monat</th><th class="n">Betrag</th><th>Status</th></tr></thead><tbody>${RE.map((r) => `<tr data-re="${r.id}" style="cursor:pointer${p?.id === r.id ? ';background:var(--sel, #eef3f6)' : ''}"><td>${esc(r.nummer)}${r.versendet_am ? ' <span title="per E-Mail versendet">✉</span>' : ''}</td><td>${esc(r.klient_name)}</td><td>${monatText(r.leistungsmonat)}</td><td class="n">${eur(r.betrag_cent / 100)}</td><td>${reSt(r)}</td></tr>`).join('') || '<tr><td colspan="5" class="sub">Noch keine Rechnungen erstellt.</td></tr>'}</tbody></table></div>
+<h2 style="margin-top:20px">Erstellte Rechnungen</h2><table class="stack"><thead><tr><th>Nr.</th><th>Klient</th><th>Monat</th><th class="n">Betrag</th><th>Status</th></tr></thead><tbody>${RE.map((r) => `<tr data-re="${r.id}" style="cursor:pointer${p?.id === r.id ? ';background:var(--sel, #eef3f6)' : ''}"><td>${esc(r.nummer)}${r.versendet_am ? ' <span title="per E-Mail versendet">✉</span>' : ''}</td><td>${esc(r.klient_name)}${r.therapie_bezeichnung ? `<br><span class="sub">${esc(r.therapie_bezeichnung)}</span>` : ''}</td><td>${monatText(r.leistungsmonat)}</td><td class="n">${eur(r.betrag_cent / 100)}</td><td>${reSt(r)}</td></tr>`).join('') || '<tr><td colspan="5" class="sub">Noch keine Rechnungen erstellt.</td></tr>'}</tbody></table></div>
 <div>${p ? `<div class="paper"><div class="row"><div><h3>Rechnung ${esc(p.nummer)}</h3>${datum(p.rechnungsdatum)} · fällig ${datum(p.faellig_am)}</div><span class="sp"></span>${reSt(p)}</div><p style="white-space:pre-line">${esc(p.empfaenger)}</p><p>betr. ${esc(p.klient_name)} · Leistungszeitraum: ${monatText(p.leistungsmonat)}</p>
 <table><thead><tr><th>Datum</th><th>Leistung</th><th class="n">Betrag</th></tr></thead><tbody>${p.positionen.map((x) => `<tr><td>${datum(x.datum)}</td><td>${esc(x.beschreibung)}</td><td class="n">${eur(x.betrag_cent / 100)}</td></tr>`).join('')}<tr><td></td><td><b>Gesamt</b></td><td class="n"><b>${eur(p.betrag_cent / 100)}</b></td></tr></tbody></table>
 ${p.mahnungen?.length ? `<p><b>Mahnungen</b><br>${p.mahnungen.map((x) => `<a href="/api/rechnungen/mahnungen/${x.id}/pdf" target="_blank">${esc(x.art)}</a> vom ${datum(x.datum)}, Frist ${datum(x.frist)}${x.gebuehr_cent ? `, Gebühr ${eur(x.gebuehr_cent / 100)}` : ''} · ${x.versendet_am ? `per E-Mail am ${datum(x.versendet_am)}` : `<a href="#" data-mail="/rechnungen/mahnungen/${x.id}">per E-Mail senden</a>`}`).join('<br>')}</p>` : ''}
@@ -205,11 +216,16 @@ ${p.bezahlt_am ? `<p class="sub">Bezahlt am ${datum(p.bezahlt_am)}${p.umsatz_id 
   },
 
   einstellungen() {
-    return `<h1>Einstellungen</h1><p class="sub">Allgemeine Beträge je Termin. Sie gelten für alle Klienten ohne eigenen Betrag; abweichende Beträge stellst du im Klientendialog ein.</p>
+    return `<h1>Einstellungen</h1><p class="sub">Allgemeine Beträge je Termin. Sie gelten für alle Klienten ohne eigenen Betrag; abweichende Beträge stellst du je Therapie in der Klientenakte ein (Stammdaten).</p>
 <form class="card" id="eform" style="max-width:520px">${SATZ.map(([f, l]) => `<label for="e-${f}">${l} (€)</label><input id="e-${f}" name="${f}" type="number" step="0.01" min="0" required value="${(EIN[f] / 100).toFixed(2)}">`).join('')}
 <p class="hint">Rechtzeitig abgesagte Termine (≥ 24 h) sind immer kostenfrei. Ein Betrag von 0 € bedeutet: wird nicht berechnet. Bereits erstellte Rechnungen ändern sich nicht.</p>
-<p class="sub">Eigene Beträge: ${KL.filter((k) => SATZ.some(([f]) => k.roh[f] != null)).map((k) => `<a href="#" data-kl="${k.id}">${esc(k.name)}</a>`).join(', ') || 'keine'}</p>
-<div class="row"><span class="sp"></span><button class="pri">Speichern</button></div></form>`;
+<p class="sub">Eigene Beträge: ${TH.filter((t) => SATZ.some(([f]) => t[f] != null)).map((t) => `<a href="#" data-kl="${t.klient_id}">${esc(kl(t.klient_id).name)} (${esc(t.bezeichnung)})</a>`).join(', ') || 'keine'}</p>
+<div class="row"><span class="sp"></span><button class="pri">Speichern</button></div></form>
+${!KONF ? '<p class="sub">Einstellungen werden geladen …</p>' : `<form class="card" id="konfform" style="max-width:720px;margin-top:16px">${[['praxis', 'Praxis (Rechnungskopf und -fuß)'], ['mail', 'E-Mail'], ['fints', 'Bankverbindung (FinTS)']].map(([g, titel]) => `<h2 style="margin-top:${g === 'praxis' ? 0 : 22}px">${titel}</h2>${KONF.felder[g].map(([n, l, geheim]) => `<label for="k-${n}">${l}</label>${geheim
+      ? `<input id="k-${n}" name="${n}" type="password" autocomplete="new-password" placeholder="${KONF.werte[n].gesetzt ? 'gespeichert – leer lassen, um es zu behalten' : 'nicht gesetzt'}">`
+      : `<input id="k-${n}" name="${n}" value="${esc(KONF.werte[n])}">`}`).join('')}${g === 'mail' ? '<div class="row" style="margin-top:10px"><button type="button" data-mailtest>Verbindung testen</button><span class="sub">erst speichern, dann testen</span></div>' : ''}${g === 'fints' ? '<p class="hint">Den Abruf prüfst du auf der Seite <a href="#umsaetze">Umsätze</a> mit „Jetzt abrufen“. Bei der ersten Verbindung muss die Freigabe in der S-pushTAN-App bestätigt werden.</p>' : ''}`).join('')}
+${KONF.verschluesselung ? '<p class="hint">Passwörter und PIN werden verschlüsselt gespeichert und nie wieder angezeigt.</p>' : '<p class="hint"><b>Passwörter können noch nicht gespeichert werden:</b> GEHEIM_SCHLUESSEL in der .env des Servers setzen.</p>'}
+<div class="row"><span class="sp"></span><button class="pri">Einstellungen speichern</button></div></form>`}`;
   },
 
   umsaetze() {
@@ -261,17 +277,13 @@ function statusDialog(id) {
 }
 
 function klientDialog(id) {
-  const k = id ? kl(id).roh : { vorname: '', nachname: '', kostentraeger: 'eltern', material_noetig: true };
+  const k = id ? kl(id).roh : { vorname: '', nachname: '', material_noetig: true };
   const f = (n, l, typ = 'text', extra = '') => `<label for="f-${n}">${l}</label><input id="f-${n}" name="${n}" type="${typ}" value="${esc(k[n] ?? '')}" ${extra}>`;
   dlg.innerHTML = `<h2>${id ? 'Klient bearbeiten' : 'Neuer Klient'}</h2><form id="kform" data-id="${id || ''}">
 <div class="grid" style="gap:10px"><div>${f('vorname', 'Vorname', 'text', 'required')}</div><div>${f('nachname', 'Nachname', 'text', 'required')}</div></div>
 <div class="grid" style="gap:10px"><div>${f('geburtsjahr', 'Jahrgang', 'number', 'min="1990" max="2030"')}</div><div>${f('schwerpunkt', 'Schwerpunkt')}</div></div>
-${f('sorgeberechtigte', 'Erziehungsberechtigte')}
+${f('sorgeberechtigte', 'Erziehungsberechtigte (Kontakt)')}
 <div class="grid" style="gap:10px"><div>${f('telefon', 'Telefon', 'tel')}</div><div>${f('email', 'E-Mail', 'email')}</div></div>
-<div class="grid" style="gap:10px"><div><label for="f-kt">Kostenträger</label><select id="f-kt" name="kostentraeger">${Object.entries(KT).map(([v, l]) => `<option value="${v}" ${k.kostentraeger === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
-<div></div></div>
-<fieldset style="border:1px solid var(--line);border-radius:8px;margin-top:12px;padding:4px 12px 12px"><legend class="sub" style="margin:0;padding:0 4px">Beträge je Termin (leer = Standard)</legend>
-<div class="grid" style="gap:10px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">${SATZ.map(([f, l]) => `<div><label for="f-${f}">${l}</label><input id="f-${f}" name="${f}" type="number" step="0.01" min="0" value="${k[f] == null ? '' : (k[f] / 100).toFixed(2)}" placeholder="${(EIN[f] / 100).toFixed(2).replace('.', ',')} € (Standard)"></div>`).join('')}</div></fieldset>
 ${f('aufnahme_datum', 'In Therapie seit', 'date')}
 <label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input type="checkbox" name="material_noetig" style="width:auto;min-height:0" ${k.material_noetig ? 'checked' : ''}> Material vor dem Ersttermin verschicken</label>
 <div class="row" style="margin-top:14px"><span class="sp"></span><button type="button" data-close>Abbrechen</button><button class="pri">Speichern</button></div></form>`;
@@ -283,9 +295,34 @@ function terminDialog() {
   const start = plusTage(S.woche, Math.min(4, Math.max(0, (new Date().getDay() + 6) % 7)));
   start.setHours(14, 0, 0, 0);
   dlg.innerHTML = `<h2>Neuer Termin</h2><form id="tform"><label for="t-k">Klient</label><select id="t-k" required>${KL.filter((k) => k.aktiv).map((k) => `<option value="${k.id}">${esc(k.name)}</option>`).join('')}</select>
+<label for="t-th">Therapie</label><select id="t-th">${therapieOptionen(KL.find((k) => k.aktiv)?.id)}</select>
 <div class="grid" style="gap:10px"><div><label for="t-d">Beginn</label><input id="t-d" type="datetime-local" required value="${lokal(start)}" step="900"></div><div><label for="t-m">Dauer</label><select id="t-m">${[45, 60, 90].map((m) => `<option value="${m}" ${m === 60 ? 'selected' : ''}>${m} Minuten</option>`).join('')}</select></div></div>
 <label for="t-w">Wiederholen</label><select id="t-w"><option value="1">einmalig</option><option value="4">wöchentlich, 4 Termine</option><option value="8">wöchentlich, 8 Termine</option><option value="12">wöchentlich, 12 Termine</option></select>
 <div class="row" style="margin-top:14px"><span class="sp"></span><button type="button" data-close>Abbrechen</button><button class="pri">Anlegen</button></div></form>`;
+  pop.classList.add('on');
+}
+
+function zahlerDialog(klientId, id) {
+  const z = id ? ZA.find((x) => x.id === id) : { art: 'eltern', name: '', adresse: '', email: '', telefon: '' };
+  const vorschlag = !id && !zahlerVon(klientId).length ? (kl(klientId).roh.sorgeberechtigte || '') : z.name;
+  dlg.innerHTML = `<h2>${id ? 'Zahler bearbeiten' : 'Neuer Zahler'}</h2><form id="zform" data-id="${id || ''}" data-klient="${klientId}">
+<label for="z-art">Art</label><select id="z-art" name="art">${Object.entries(ZART).map(([v, l]) => `<option value="${v}" ${z.art === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+<label for="z-name">Name</label><input id="z-name" name="name" required value="${esc(vorschlag)}" placeholder="z. B. Sandra Beispiel">
+<label for="z-adr">Anschrift</label><textarea id="z-adr" name="adresse" rows="3" placeholder="Straße Nr.&#10;PLZ Ort">${esc(z.adresse || '')}</textarea>
+<div class="grid" style="gap:10px"><div><label for="z-mail">E-Mail (Rechnungsversand)</label><input id="z-mail" name="email" type="email" value="${esc(z.email || '')}"></div><div><label for="z-tel">Telefon</label><input id="z-tel" name="telefon" type="tel" value="${esc(z.telefon || '')}"></div></div>
+<div class="row" style="margin-top:14px">${id ? `<button type="button" data-zloesch="${id}">Löschen</button>` : ''}<span class="sp"></span><button type="button" data-close>Abbrechen</button><button class="pri">Speichern</button></div></form>`;
+  pop.classList.add('on');
+}
+
+function therapieDialog(klientId, id) {
+  const t = id ? TH.find((x) => x.id === id) : { bezeichnung: '', zahler_id: zahlerVon(klientId)[0]?.id, aktiv: true };
+  dlg.innerHTML = `<h2>${id ? 'Therapie bearbeiten' : 'Neue Therapie'}</h2><form id="thform" data-id="${id || ''}" data-klient="${klientId}">
+<label for="th-b">Therapieart</label><input id="th-b" name="bezeichnung" required list="th-arten" value="${esc(t.bezeichnung)}" placeholder="z. B. LRS-Therapie"><datalist id="th-arten">${['LRS-Therapie', 'Dyskalkulie-Therapie', 'Lerntherapie', 'Konzentrationstraining'].map((x) => `<option value="${x}">`).join('')}</datalist>
+<label for="th-z">Zahler</label><select id="th-z" name="zahler_id" required>${zahlerVon(klientId).map((z) => `<option value="${z.id}" ${z.id === t.zahler_id ? 'selected' : ''}>${esc(z.name)} (${esc(ZART[z.art] ?? z.art)})</option>`).join('')}</select>
+<fieldset style="border:1px solid var(--line);border-radius:8px;margin-top:12px;padding:4px 12px 12px"><legend class="sub" style="margin:0;padding:0 4px">Beträge je Termin (leer = Standard aus den Einstellungen)</legend>
+<div class="grid" style="gap:10px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">${SATZ.map(([f, l]) => `<div><label for="th-${f}">${l}</label><input id="th-${f}" name="${f}" type="number" step="0.01" min="0" value="${t[f] == null ? '' : (t[f] / 100).toFixed(2)}" placeholder="${(EIN[f] / 100).toFixed(2).replace('.', ',')} € (Standard)"></div>`).join('')}</div></fieldset>
+${id ? `<label style="display:flex;gap:8px;align-items:center;margin-top:12px"><input type="checkbox" name="aktiv" style="width:auto;min-height:0" ${t.aktiv ? 'checked' : ''}> Therapie läuft (abwählen, wenn sie beendet ist)</label>` : ''}
+<div class="row" style="margin-top:14px"><span class="sp"></span><button type="button" data-close>Abbrechen</button><button class="pri">Speichern</button></div></form>`;
   pop.classList.add('on');
 }
 
@@ -308,7 +345,7 @@ async function mailDialog(pfad) {
 // ---------- Ereignisse ----------
 document.addEventListener('click', (e) => {
   if (e.target === pop) return schliessen();
-  const b = e.target.closest('[data-term],[data-set],[data-close],[data-send],[data-material],[data-go],[data-kl],[data-tab],[data-edit],[data-archive],[data-doku],[data-arch],[data-neutermin],[data-woche],[data-loesch],[data-abruf],[data-re],[data-rest],[data-lauf],[data-abgleich],[data-mahnen],[data-mail]');
+  const b = e.target.closest('[data-term],[data-set],[data-close],[data-send],[data-material],[data-go],[data-kl],[data-tab],[data-edit],[data-archive],[data-doku],[data-arch],[data-neutermin],[data-woche],[data-loesch],[data-abruf],[data-re],[data-rest],[data-lauf],[data-abgleich],[data-mahnen],[data-mail],[data-zahler],[data-therapie],[data-zloesch],[data-mailtest]');
   if (!b) return;
   const d = b.dataset;
   if (d.term) return statusDialog(d.term);
@@ -332,6 +369,14 @@ document.addEventListener('click', (e) => {
     const id = R.auswahl.id;
     return aktion(async () => { await api(`/rechnungen/${id}/status`, { methode: 'PUT', daten: { status: d.rest } }); R.auswahl = await api(`/rechnungen/${id}`); await ladeVorschau(); });
   }
+  if (d.zahler !== undefined) return zahlerDialog(+d.klient, +d.zahler);
+  if (d.therapie !== undefined) return therapieDialog(+d.klient, +d.therapie);
+  if (d.zloesch) { if (!confirm('Zahler löschen?')) return; schliessen(); return aktion(() => api(`/zahler/${d.zloesch}`, { methode: 'DELETE' })); }
+  if ('mailtest' in d) {
+    b.disabled = true; b.textContent = 'Prüfe …';
+    return api('/konfiguration/mail-test', { methode: 'POST' }).then(() => alert('Anmeldung am Mailserver erfolgreich.'), (x) => alert(x.message))
+      .finally(() => { b.disabled = false; b.textContent = 'Verbindung testen'; });
+  }
   if (d.mail) { e.preventDefault(); return mailDialog(d.mail).catch((x) => { S.fehler = x.message; render(); }); }
   if (d.mahnen) return aktion(async () => {
     const m = await api(`/rechnungen/${d.mahnen}/mahnung`, { methode: 'POST', daten: { erzwingen: 'sofort' in d } });
@@ -350,6 +395,7 @@ document.addEventListener('input', (e) => {
 document.addEventListener('change', async (e) => {
   if (e.target.matches('[data-filter]')) { U.nur = e.target.value; await ladeUmsaetze(); render(); }
   if (e.target.matches('[data-remonat]')) { R.monat = e.target.value; await ladeVorschau(); render(); }
+  if (e.target.id === 't-k') { dlg.querySelector('#t-th').innerHTML = therapieOptionen(+e.target.value); return; }
   if (e.target.id === 'dk') { V._k = +e.target.value; render(); }
 });
 
@@ -363,11 +409,35 @@ document.addEventListener('submit', (e) => {
       geburtsjahr: w.geburtsjahr ? +w.geburtsjahr : null,
       schwerpunkt: w.schwerpunkt || null, sorgeberechtigte: w.sorgeberechtigte || null,
       telefon: w.telefon || null, email: w.email || null,
-      kostentraeger: w.kostentraeger, ...Object.fromEntries(SATZ.map(([f]) => [f, centAusEingabe(w[f])])),
       aufnahme_datum: w.aufnahme_datum || null, material_noetig: 'material_noetig' in w,
     };
     schliessen();
-    return aktion(() => (f.dataset.id ? api(`/klienten/${f.dataset.id}`, { methode: 'PUT', daten }) : api('/klienten', { methode: 'POST', daten })));
+    // Neuer Klient: direkt in die Akte (Stammdaten), um Zahler und Therapie anzulegen
+    return aktion(async () => {
+      if (f.dataset.id) return api(`/klienten/${f.dataset.id}`, { methode: 'PUT', daten });
+      const neu = await api('/klienten', { methode: 'POST', daten });
+      V._k = neu.id; V._tab = 'stamm'; location.hash = 'akte';
+    });
+  }
+  if (f.id === 'zform') {
+    const w = Object.fromEntries(new FormData(f));
+    const daten = { art: w.art, name: w.name.trim(), adresse: w.adresse.trim() || null, email: w.email.trim() || null, telefon: w.telefon.trim() || null };
+    schliessen();
+    return aktion(() => (f.dataset.id ? api(`/zahler/${f.dataset.id}`, { methode: 'PUT', daten }) : api('/zahler', { methode: 'POST', daten: { ...daten, klient_id: +f.dataset.klient } })));
+  }
+  if (f.id === 'thform') {
+    const w = Object.fromEntries(new FormData(f));
+    const daten = { bezeichnung: w.bezeichnung.trim(), zahler_id: +w.zahler_id, ...Object.fromEntries(SATZ.map(([n]) => [n, centAusEingabe(w[n])])) };
+    if (f.dataset.id) daten.aktiv = 'aktiv' in w;
+    schliessen();
+    return aktion(() => (f.dataset.id ? api(`/therapien/${f.dataset.id}`, { methode: 'PUT', daten }) : api('/therapien', { methode: 'POST', daten: { ...daten, klient_id: +f.dataset.klient } })));
+  }
+  if (f.id === 'konfform') {
+    const daten = {};
+    for (const el of f.querySelectorAll('[name]')) {
+      if (el.type === 'password') { if (el.value) daten[el.name] = el.value; } else daten[el.name] = el.value;
+    }
+    return aktion(async () => { KONF = await api('/konfiguration', { methode: 'PUT', daten }); alert('Einstellungen gespeichert.'); });
   }
   if (f.id === 'eform') {
     const daten = Object.fromEntries(SATZ.map(([n]) => [n, centAusEingabe(f.querySelector(`#e-${n}`).value) ?? 0]));
@@ -383,12 +453,12 @@ document.addEventListener('submit', (e) => {
   }
   if (f.id === 'tform') {
     const k = +f.querySelector('#t-k').value, beginn = new Date(f.querySelector('#t-d').value);
-    const dauer = +f.querySelector('#t-m').value, anzahl = +f.querySelector('#t-w').value;
+    const dauer = +f.querySelector('#t-m').value, anzahl = +f.querySelector('#t-w').value, th = +f.querySelector('#t-th').value;
     schliessen();
     return aktion(async () => {
       for (let i = 0; i < anzahl; i++) {
         const b = plusTage(beginn, 7 * i);
-        await api('/termine', { methode: 'POST', daten: { klient_id: k, beginn: b.toISOString(), ende: new Date(+b + dauer * 60000).toISOString() } });
+        await api('/termine', { methode: 'POST', daten: { klient_id: k, therapie_id: th || undefined, beginn: b.toISOString(), ende: new Date(+b + dauer * 60000).toISOString() } });
       }
       S.woche = montag(beginn);
     });
@@ -404,7 +474,8 @@ document.addEventListener('submit', (e) => {
       if (vorhanden) {
         await api(`/termine/${vorhanden.id}`, { methode: 'PUT', daten: { status: 'stattgefunden', dokumentation: [vorhanden.txt, dokumentation].filter(Boolean).join('\n'), ende: new Date(+beginn + dauer * 60000).toISOString() } });
       } else {
-        await api('/termine', { methode: 'POST', daten: { klient_id: k, beginn: beginn.toISOString(), ende: new Date(+beginn + dauer * 60000).toISOString(), status: 'stattgefunden', dokumentation } });
+        const th = f.querySelector('#dth')?.value;
+        await api('/termine', { methode: 'POST', daten: { klient_id: k, therapie_id: th ? +th : undefined, beginn: beginn.toISOString(), ende: new Date(+beginn + dauer * 60000).toISOString(), status: 'stattgefunden', dokumentation } });
       }
       V._k = k; V._tab = 'hist'; location.hash = 'akte';
     });
@@ -414,6 +485,7 @@ document.addEventListener('submit', (e) => {
 addEventListener('hashchange', async () => {
   if (location.hash === '#umsaetze') { await ladeUmsatzStatus(); await ladeUmsaetze(); }
   if (location.hash === '#rechnungen') await ladeVorschau();
+  if (location.hash === '#einstellungen') { render(); try { KONF = await api('/konfiguration'); } catch (x) { S.fehler = x.message; } }
   render();
 });
 addEventListener('keydown', (e) => { if (e.key === 'Escape') schliessen(); });
@@ -424,6 +496,7 @@ addEventListener('keydown', (e) => { if (e.key === 'Escape') schliessen(); });
   await ladeUmsatzStatus();
   if (location.hash === '#umsaetze') await ladeUmsaetze();
   await ladeVorschau();
+  if (location.hash === '#einstellungen') { try { KONF = await api('/konfiguration'); } catch (x) { S.fehler = x.message; } }
   render();
 })();
 // Zähler und Daten jede Minute aktualisieren (z.B. neue Umsätze nach dem Abruf um 08:00/16:00)

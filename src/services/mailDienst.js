@@ -19,7 +19,7 @@ export function smtpAusEnv(env = process.env) {
 export function entwurfRechnung(r, praxisName) {
   return {
     betreff: `Rechnung ${r.nummer} – ${r.klient_name}, ${monatName(r.leistungsmonat)}`,
-    text: `Guten Tag,\n\nanbei erhalten Sie die Rechnung ${r.nummer} für die Lerntherapie von ${r.klient_name} im ${monatName(r.leistungsmonat)} über ${eur(r.betrag_cent)}.\n\nBitte überweisen Sie den Betrag bis zum ${datum(r.faellig_am)} unter Angabe der Rechnungsnummer.\n\nMit freundlichen Grüßen\n${praxisName}`,
+    text: `Guten Tag,\n\nanbei erhalten Sie die Rechnung ${r.nummer} für die ${r.therapie_bezeichnung || 'Lerntherapie'} von ${r.klient_name} im ${monatName(r.leistungsmonat)} über ${eur(r.betrag_cent)}.\n\nBitte überweisen Sie den Betrag bis zum ${datum(r.faellig_am)} unter Angabe der Rechnungsnummer.\n\nMit freundlichen Grüßen\n${praxisName}`,
   };
 }
 
@@ -30,16 +30,23 @@ export function entwurfMahnung(r, m, art, offenCent, praxisName) {
   };
 }
 
-export function erstelleMailDienst(knex, { env = process.env, transport } = {}) {
-  const konfig = smtpAusEnv(env);
-  const versender = transport ?? (konfig && nodemailer.createTransport(konfig.transport));
+// Liest die SMTP-Einstellungen bei jedem Versand neu (in der Anwendung änderbar, siehe konfigDienst)
+export function erstelleMailDienst(knex, { werte = async () => process.env, transport } = {}) {
+  async function verbindung() {
+    const env = await werte();
+    const smtp = smtpAusEnv(env);
+    if (transport) return { versender: transport, absender: env.MAIL_ABSENDER, bcc: env.MAIL_BCC || undefined };
+    if (!smtp) return null;
+    return { versender: nodemailer.createTransport(smtp.transport), absender: smtp.absender, bcc: smtp.bcc };
+  }
 
   // Sendet und protokolliert; wirft bei Fehlern weiter, nachdem der Fehlversuch protokolliert ist
   async function sende({ an, betreff, text, anhang, rechnung_id = null, mahnung_id = null }) {
-    if (!versender) throw Object.assign(new Error('E-Mail-Versand ist nicht eingerichtet (SMTP_HOST in der .env fehlt)'), { status: 503, expose: true });
+    const v = await verbindung();
+    if (!v) throw Object.assign(new Error('E-Mail-Versand ist nicht eingerichtet (Einstellungen → E-Mail)'), { status: 503, expose: true });
     try {
-      const info = await versender.sendMail({
-        from: konfig?.absender ?? env.MAIL_ABSENDER, to: an, bcc: konfig?.bcc, subject: betreff, text,
+      const info = await v.versender.sendMail({
+        from: v.absender, to: an, bcc: v.bcc, subject: betreff, text,
         attachments: anhang ? [{ filename: anhang.name, content: Buffer.from(anhang.daten), contentType: 'application/pdf' }] : [],
       });
       await knex('mail_versand').insert({ rechnung_id, mahnung_id, an, betreff, message_id: info.messageId ?? null });
@@ -50,5 +57,5 @@ export function erstelleMailDienst(knex, { env = process.env, transport } = {}) 
     }
   }
 
-  return { sende, eingerichtet: () => !!versender };
+  return { sende, eingerichtet: async () => !!(await verbindung()) };
 }
